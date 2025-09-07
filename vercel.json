@@ -1,9 +1,6 @@
 {
   "buildCommand": "echo 'No build step needed'",
   "outputDirectory": ".",
-  "engines": {
-    "node": "18.x"
-  },
   "functions": {
     "api/contact.js": {
       "runtime": "@vercel/node@2.15.10"
