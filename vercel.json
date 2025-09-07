@@ -1,9 +1,4 @@
 {
   "buildCommand": "echo 'No build step needed'",
-  "outputDirectory": ".",
-  "functions": {
-    "api/contact.js": {
-      "runtime": "@vercel/node@3.2.0"
-    }
-  }
+  "outputDirectory": "."
 }
