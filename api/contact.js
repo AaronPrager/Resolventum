@@ -1,25 +1,12 @@
-import nodemailer from 'nodemailer';
+const nodemailer = require('nodemailer');
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method not allowed' });
   }
 
   try {
-    // Handle both JSON and FormData
-    let name, email, subject, message;
-    
-    if (req.body && typeof req.body === 'object' && !req.body.constructor.name.includes('FormData')) {
-      // JSON body
-      ({ name, email, subject, message } = req.body);
-    } else {
-      // FormData body - parse manually
-      const body = req.body;
-      name = body?.name || req.body?.get?.('name');
-      email = body?.email || req.body?.get?.('email');
-      subject = body?.subject || req.body?.get?.('subject');
-      message = body?.message || req.body?.get?.('message');
-    }
+    const { name, email, subject, message } = req.body;
 
     // Validate required fields
     if (!name || !email || !subject || !message) {
