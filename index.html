@@ -230,6 +230,14 @@
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
         }
 
+        .success-message {
+            color: #28a745;
+        }
+
+        .error-message {
+            color: #dc3545;
+        }
+
         @media (max-width: 768px) {
             .header-content {
                 flex-direction: column;
@@ -317,7 +325,7 @@
 
         <div class="contact-section" id="contact">
             <h2>Contact Us</h2>
-            <form class="contact-form" action="#" method="POST">
+            <form class="contact-form" action="/api/contact" method="POST">
                 <div class="form-group">
                     <label for="name">Name *</label>
                     <input type="text" id="name" name="name" required>
@@ -340,7 +348,48 @@
                 
                 <button type="submit" class="submit-btn">Send Message</button>
             </form>
+            
+            <div id="form-message" style="margin-top: 1rem; text-align: center; font-weight: 600;"></div>
         </div>
     </main>
+
+    <script>
+        document.querySelector('.contact-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const messageDiv = document.getElementById('form-message');
+            const submitBtn = document.querySelector('.submit-btn');
+            
+            // Show loading state
+            submitBtn.textContent = 'Sending...';
+            submitBtn.disabled = true;
+            messageDiv.textContent = '';
+            
+            try {
+                const response = await fetch('/api/contact', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    messageDiv.textContent = 'Thank you! Your message has been sent successfully.';
+                    messageDiv.className = 'success-message';
+                    this.reset();
+                } else {
+                    messageDiv.textContent = result.message || 'Error sending message. Please try again.';
+                    messageDiv.className = 'error-message';
+                }
+            } catch (error) {
+                messageDiv.textContent = 'Error sending message. Please try again.';
+                messageDiv.className = 'error-message';
+            } finally {
+                submitBtn.textContent = 'Send Message';
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
 </body>
 </html>

@@ -1,0 +1,17 @@
+{
+  "name": "resolventum-website",
+  "version": "1.0.0",
+  "description": "Resolventum diabetes platform website",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "echo 'No build step needed for static site'",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.7"
+  },
+  "devDependencies": {
+    "vercel": "^47.0.5"
+  }
+}
