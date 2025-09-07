@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resolventum - Choose Your Diabetes Platform</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 2rem;
+        }
+
+        .logo {
+            height: 50px;
+            width: auto;
+        }
+
+        .nav {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav a {
+            color: white;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .nav a:hover {
+            color: #ffd700;
+        }
+
+        .main-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+        }
+
+        .title {
+            text-align: center;
+            font-size: 3rem;
+            margin-bottom: 3rem;
+            color: #2c3e50;
+            font-weight: 300;
+        }
+
+        .platforms {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 3rem;
+            margin-top: 2rem;
+        }
+
+        .platform-card {
+            background: white;
+            border-radius: 15px;
+            padding: 2rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .platform-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+        }
+
+        .platform-image {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+        }
+
+        .platform-title {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .platform-description {
+            font-size: 1.1rem;
+            color: #666;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+
+        .platform-link {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            margin-top: auto;
+        }
+
+        .platform-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .disclaimer {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 2rem;
+            margin-top: 4rem;
+            font-size: 0.9rem;
+            line-height: 1.6;
+            color: #666;
+        }
+
+        .disclaimer h3 {
+            color: #dc3545;
+            margin-bottom: 1rem;
+            font-size: 2rem;
+            font-weight: 600;
+        }
+
+        .disclaimer p {
+            margin-bottom: 1rem;
+        }
+
+        .disclaimer p:last-child {
+            margin-bottom: 0;
+        }
+
+        .contact-section {
+            background: white;
+            border-radius: 15px;
+            padding: 3rem;
+            margin-top: 3rem;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .contact-section h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 2rem;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+
+        .contact-form {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            height: 120px;
+            resize: vertical;
+        }
+
+        .submit-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 25px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: block;
+            margin: 0 auto;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+
+            .nav {
+                gap: 1.5rem;
+            }
+
+            .title {
+                font-size: 2rem;
+            }
+
+            .platforms {
+                grid-template-columns: 1fr;
+                gap: 2rem;
+            }
+
+            .platform-card {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <a href="#" class="logo">
+                <img src="Logo.png" alt="Resolventum Logo" class="logo">
+            </a>
+            <nav class="nav">
+                <a href="#contact">Contact</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <h1 class="title">Choose Your Diabetes Platform</h1>
+        
+        <div class="platforms">
+            <div class="platform-card">
+                <img src="photo1.jpeg" alt="Personal Diabetes Management" class="platform-image">
+                <h2 class="platform-title">Personal Diabetes Management</h2>
+                <p class="platform-description">
+                    Built specifically for individuals living with Type 1 Diabetes, our personal platform provides tools for daily diabetes management, glucose tracking, insulin calculations, and personalized therapy recommendations powered by artificial intelligence.
+                </p>
+                <ul style="text-align: left; margin: 1.5rem 0; padding-left: 1.5rem; color: #666;">
+                    <li>Personal glucose tracking and analysis</li>
+                    <li>AI-powered therapy adjustments</li>
+                    <li>Nightscout integration and data sync</li>
+                    <li>Comprehensive diabetes profile management</li>
+                </ul>
+                <a href="https://www.boostt1d.com" class="platform-link" target="_blank">
+                    Access Personal Platform
+                </a>
+            </div>
+
+            <div class="platform-card">
+                <img src="photo2.jpeg" alt="Policymakers Dashboard" class="platform-image">
+                <h2 class="platform-title">Policymakers Dashboard</h2>
+                <p class="platform-description">
+                    Designed for policymakers, researchers, and advocates, this platform offers comprehensive data analysis on insulin access issues across congressional districts, helping to identify high-risk areas and inform policy decisions.
+                </p>
+                <ul style="text-align: left; margin: 1.5rem 0; padding-left: 1.5rem; color: #666;">
+                    <li>Interactive congressional district risk mapping</li>
+                    <li>Representative contact information and analysis</li>
+                    <li>Risk assessment and priority identification</li>
+                    <li>Legislation tracking and policy resources</li>
+                </ul>
+                <a href="https://cac-ia2.vercel.app" class="platform-link" target="_blank">
+                    Access Policy Dashboard
+                </a>
+            </div>
+        </div>
+
+        <div class="disclaimer">
+            <h3>Important Disclaimer</h3>
+            <p>The BoostT1D platform is provided for educational and informational purposes only. It is not intended to diagnose, treat, cure, or prevent any medical condition, nor should it be used as a substitute for professional medical advice. Always seek the guidance of your physician, endocrinologist, or other qualified healthcare provider with any questions you may have about your health, diabetes management, or insulin use.</p>
+            
+            <p>The Policy Dashboard presents de-identified, aggregated data and public sources to highlight insulin access trends. It does not display or share personal medical records.</p>
+            
+            <p>By using this site, you acknowledge that the platform is a support tool only, and that all health-related decisions remain solely between you and your medical team.</p>
+        </div>
+
+        <div class="contact-section" id="contact">
+            <h2>Contact Us</h2>
+            <form class="contact-form" action="#" method="POST">
+                <div class="form-group">
+                    <label for="name">Name *</label>
+                    <input type="text" id="name" name="name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="email">Email *</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="subject">Subject *</label>
+                    <input type="text" id="subject" name="subject" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="message">Message *</label>
+                    <textarea id="message" name="message" required placeholder="Please describe your inquiry or how we can help you..."></textarea>
+                </div>
+                
+                <button type="submit" class="submit-btn">Send Message</button>
+            </form>
+        </div>
+    </main>
+</body>
+</html>
