@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useState } from 'react'
 import { Login } from './pages/Login'
+import { Register } from './pages/Register'
 import { Students } from './pages/Students'
 import { Lessons } from './pages/Lessons'
 import { Calendar } from './pages/Calendar'
@@ -30,6 +31,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
       <Route path="/" element={<Layout />}>
         <Route index element={<ProtectedRoute><Calendar /></ProtectedRoute>} />
         <Route path="students" element={<ProtectedRoute><Students /></ProtectedRoute>} />

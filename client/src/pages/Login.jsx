@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { BookOpen } from 'lucide-react'
 
@@ -102,6 +102,10 @@ export function Login() {
             {isLogin ? 'Login' : 'Register'}
           </button>
         </form>
+        <div className="mt-4 text-sm text-gray-600 text-center">
+          New here?{' '}
+          <Link to="/register" className="text-indigo-600 hover:text-indigo-800">Create an account</Link>
+        </div>
       </div>
     </div>
   )

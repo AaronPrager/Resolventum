@@ -118,6 +118,13 @@ router.post(
         allDay
       } = req.body;
 
+      // Helper: default status based on date (past -> completed, future -> scheduled) if not provided
+      const resolveStatus = (date) => {
+        if (status) return status;
+        const d = new Date(date);
+        return d < new Date() ? 'completed' : 'scheduled';
+      };
+
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
         const recurringGroupId = uuidv4();
@@ -130,7 +137,7 @@ router.post(
           subject,
           price,
           notes: notes || null,
-          status: status || 'scheduled',
+          status: resolveStatus(date),
           locationType: locationType || 'in-person',
           link: link || null,
           isRecurring: true,
@@ -144,6 +151,34 @@ router.post(
         const lessons = await prisma.lesson.createMany({
           data: lessonsData
         });
+
+        // Deduct packages: consume up to lessons.count from student's active packages
+        try {
+          let remainingToConsume = lessons.count;
+          if (remainingToConsume > 0) {
+            // Get student's active packages ordered by purchasedAt
+            const pkgs = await prisma.package.findMany({
+              where: {
+                studentId,
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+              },
+              orderBy: { purchasedAt: 'asc' }
+            });
+            for (const pkg of pkgs) {
+              const available = (pkg.totalLessons || 0) - (pkg.lessonsUsed || 0);
+              if (available <= 0) continue;
+              const consume = Math.min(available, remainingToConsume);
+              await prisma.package.update({
+                where: { id: pkg.id },
+                data: { lessonsUsed: { increment: consume } }
+              });
+              remainingToConsume -= consume;
+              if (remainingToConsume <= 0) break;
+            }
+          }
+        } catch (e) {
+          console.error('Package deduction error (recurring):', e);
+        }
 
         res.status(201).json({ 
           message: `${lessons.count} lessons created successfully`,
@@ -159,7 +194,7 @@ router.post(
           subject,
           price,
           notes: notes || null,
-          status: status || 'scheduled',
+          status: resolveStatus(dateTime),
           locationType: locationType || 'in-person',
           link: link || null,
           isRecurring: false,
@@ -176,6 +211,25 @@ router.post(
             student: true
           }
         });
+
+        // Deduct from student's active package (one lesson)
+        try {
+          const pkg = await prisma.package.findFirst({
+            where: {
+              studentId,
+              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+            },
+            orderBy: { purchasedAt: 'asc' }
+          });
+          if (pkg && (pkg.totalLessons || 0) > (pkg.lessonsUsed || 0)) {
+            await prisma.package.update({
+              where: { id: pkg.id },
+              data: { lessonsUsed: { increment: 1 } }
+            });
+          }
+        } catch (e) {
+          console.error('Package deduction error:', e);
+        }
 
         res.status(201).json(lesson);
       }

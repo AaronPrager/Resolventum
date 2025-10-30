@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Clock, User, Calendar as CalendarIcon, MapPin, Video, DollarSign, FileText } from 'lucide-react'
+import { Plus, Edit, Trash2, Clock, User, Calendar as CalendarIcon, MapPin, Video, DollarSign, FileText, ChevronUp, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Lessons() {
@@ -138,11 +138,11 @@ export function Lessons() {
 
   const SortIcon = ({ column }) => {
     if (sortConfig.key !== column) {
-      return <span className="ml-1 text-gray-400">⇅</span>
+      return <ChevronUp className="ml-1 h-4 w-4 text-gray-300" />
     }
-    return sortConfig.direction === 'asc' ? 
-      <span className="ml-1">↑</span> : 
-      <span className="ml-1">↓</span>
+    return sortConfig.direction === 'asc' 
+      ? <ChevronUp className="ml-1 h-4 w-4 text-indigo-600" /> 
+      : <ChevronDown className="ml-1 h-4 w-4 text-indigo-600" />
   }
 
   const handleSubmit = async (e) => {
@@ -458,8 +458,8 @@ export function Lessons() {
                       onClick={() => setSelectedLesson(lesson)}
                       className={`cursor-pointer transition-colors ${
                         isSelected 
-                          ? 'bg-indigo-50 border-l-4 border-indigo-600 pl-4 pr-4 py-3' 
-                          : 'hover:bg-gray-50 p-4 pl-[17px]'
+                          ? 'bg-indigo-100 border-l-4 border-indigo-700 pl-4 pr-4 py-3' 
+                          : 'hover:bg-indigo-50 p-4 pl-[17px]'
                       }`}
                     >
                       <div className="grid grid-cols-12 gap-4 items-center">

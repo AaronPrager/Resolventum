@@ -330,6 +330,22 @@ export function Calendar() {
     }
   })
 
+  // Custom month event renderer: show start time and truncate title
+  const MonthEvent = ({ event }) => {
+    const isAllDay = event.allDay
+    const timeLabel = isAllDay
+      ? ''
+      : new Date(event.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+    return (
+      <div className="flex items-center gap-1 overflow-hidden text-ellipsis whitespace-nowrap">
+        {!isAllDay && (
+          <span className="text-gray-700 shrink-0">{timeLabel}</span>
+        )}
+        <span className="overflow-hidden text-ellipsis whitespace-nowrap">{event.title}</span>
+      </div>
+    )
+  }
+
   const handleSelectEvent = (event) => {
     // Handle both calendar events (event.resource) and direct lesson objects (event.lesson or just event)
     const lesson = event.resource || event.lesson || event
@@ -388,22 +404,37 @@ export function Calendar() {
   // Custom event styling
   const eventStyleGetter = (event) => {
     const isSelected = selectedLesson && event.resource && event.resource.id === selectedLesson.id
-    
-    return {
-      className: isSelected ? 'rbc-selected-event' : '',
-      style: {
-        backgroundColor: isSelected ? '#e0e7ff' : 'transparent',
-        borderLeft: `3px solid #4338ca`,
-        borderRadius: '0',
+
+    // Default styles (month view thin line look)
+    let style = {
+      backgroundColor: 'transparent',
+      borderLeft: '3px solid #4338ca',
+      borderRadius: '0',
+      color: '#4338ca',
+      display: 'block',
+      fontSize: '0.75rem',
+      padding: '1px 2px 1px 4px',
+      fontWeight: '500',
+      height: 'auto',
+      minHeight: '18px'
+    }
+
+    // Week/Day view: fill block with light purple
+    if (currentView === 'week' || currentView === 'day') {
+      style = {
+        ...style,
+        backgroundColor: '#e0e7ff',
         color: '#4338ca',
-        display: 'block',
-        fontSize: '0.75rem',
-        padding: '1px 2px 1px 4px',
-        fontWeight: isSelected ? '600' : '500',
-        height: 'auto',
-        minHeight: '18px'
+        borderLeft: 'none'
       }
     }
+
+    // Selected state emphasis
+    if (isSelected) {
+      style = { ...style, backgroundColor: '#e0e7ff', fontWeight: '600' }
+    }
+
+    return { className: isSelected ? 'rbc-selected-event' : '', style }
   }
 
   const formatTime = (dateTime) => {
@@ -475,6 +506,7 @@ export function Calendar() {
               startAccessor="start"
               endAccessor="end"
               selectable
+              components={{ month: { event: MonthEvent } }}
               onSelectEvent={(event) => {
                 const lesson = event.resource || event.lesson || event
                 setSelectedLesson(lesson)

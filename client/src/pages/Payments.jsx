@@ -1,20 +1,33 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Download, DollarSign, ChevronUp, ChevronDown, X, Trash2 } from 'lucide-react'
+import { Plus, Download, DollarSign, ChevronUp, ChevronDown, X, Trash2, User, Calendar as CalendarIcon, FileText } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Payments() {
   const [payments, setPayments] = useState([])
   const [students, setStudents] = useState([])
+  const [selectedPayment, setSelectedPayment] = useState(null)
   const [showModal, setShowModal] = useState(false)
+  const [showPackageModal, setShowPackageModal] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
+  const [filterStudentId, setFilterStudentId] = useState('')
   const [formData, setFormData] = useState({
     studentId: '',
     amount: '',
     method: 'venmo',
     date: new Date().toISOString().split('T')[0],
     notes: ''
+  })
+
+  const [packageForm, setPackageForm] = useState({
+    studentId: '',
+    name: '10-Lesson Package',
+    totalLessons: 10,
+    price: '',
+    purchasedAt: new Date().toISOString().split('T')[0],
+    expiresAt: '',
+    method: 'venmo'
   })
 
   useEffect(() => {
@@ -115,6 +128,18 @@ export function Payments() {
     setEditingPayment(null)
   }
 
+  const resetPackageForm = () => {
+    setPackageForm({
+      studentId: '',
+      name: '10-Lesson Package',
+      totalLessons: 10,
+      price: '',
+      purchasedAt: new Date().toISOString().split('T')[0],
+      expiresAt: '',
+      method: 'venmo'
+    })
+  }
+
   const sortData = (key) => {
     let direction = 'asc'
     if (sortConfig.key === key && sortConfig.direction === 'asc') {
@@ -123,7 +148,12 @@ export function Payments() {
     setSortConfig({ key, direction })
   }
 
-  const sortedPayments = [...payments].sort((a, b) => {
+  const filteredPayments = payments.filter((p) => {
+    const matchStudent = filterStudentId ? p.studentId === filterStudentId : true
+    return matchStudent
+  })
+
+  const sortedPayments = [...filteredPayments].sort((a, b) => {
     let aValue, bValue
 
     if (sortConfig.key === 'studentName') {
@@ -160,6 +190,40 @@ export function Payments() {
       <ChevronDown className="h-4 w-4 text-indigo-600" />
   }
 
+  const handleSubmitPackage = async (e) => {
+    e.preventDefault()
+    try {
+      const submitData = {
+        studentId: packageForm.studentId,
+        name: packageForm.name,
+        totalLessons: Number(packageForm.totalLessons),
+        price: parseFloat(packageForm.price),
+        purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
+        ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : {})
+      }
+
+      await api.post('/packages', submitData)
+
+      // Also record a payment for the package purchase so it shows in payments list
+      await api.post('/payments', {
+        studentId: packageForm.studentId,
+        amount: parseFloat(packageForm.price),
+        method: packageForm.method,
+        date: new Date(packageForm.purchasedAt).toISOString(),
+        notes: `Package: ${packageForm.name}`
+      })
+
+      toast.success('Package created and payment recorded')
+      await fetchPayments()
+      setShowPackageModal(false)
+      resetPackageForm()
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to create package')
+    }
+  }
+
+  // no extra filters
+
   const generateInvoice = async (studentId, month, year) => {
     try {
       const response = await api.post(
@@ -181,136 +245,189 @@ export function Payments() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Payments</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Manage student payments
-          </p>
-        </div>
-        <button
-          onClick={() => { resetForm(); setShowModal(true); }}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
-        >
-          <Plus className="h-5 w-5 mr-2" />
-          Add Payment
-        </button>
-      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Payments List - 2 columns */}
+        <div className="lg:col-span-2 bg-white rounded-lg shadow">
+          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Payments</h2>
+              <p className="text-sm text-gray-500 mt-1">{payments.length} {payments.length === 1 ? 'payment' : 'payments'}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { resetPackageForm(); setShowPackageModal(true); }}
+                className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
+                title="Add package"
+              >
+                Add Package
+              </button>
+              <button
+                onClick={() => { resetForm(); setShowModal(true); }}
+                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                title="Add payment"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
 
-      {sortedPayments.length === 0 ? (
-        <div className="bg-white shadow rounded-lg p-8 text-center">
-          <DollarSign className="mx-auto h-12 w-12 text-gray-400" />
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No payments</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by recording a payment.</p>
+          {/* Filters */}
+          <div className="px-4 py-2 flex flex-wrap items-center gap-2 text-sm border-b border-gray-200 bg-white">
+            <select
+              value={filterStudentId}
+              onChange={(e) => setFilterStudentId(e.target.value)}
+              className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-0"
+            >
+              <option value="">All students</option>
+              {students.map(s => (
+                <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Headers */}
+          {sortedPayments.length > 0 && (
+            <div className="grid grid-cols-12 gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <div className="col-span-4 flex items-center cursor-pointer hover:text-gray-700" onClick={() => sortData('studentName')}>
+                Student
+                <SortIcon column="studentName" />
+              </div>
+              <div className="col-span-3 flex items-center cursor-pointer hover:text-gray-700" onClick={() => sortData('amount')}>
+                Amount
+                <SortIcon column="amount" />
+              </div>
+              <div className="col-span-3 flex items-center cursor-pointer hover:text-gray-700" onClick={() => sortData('date')}>
+                Date
+                <SortIcon column="date" />
+              </div>
+              <div className="col-span-2 flex items-center cursor-pointer hover:text-gray-700" onClick={() => sortData('method')}>
+                Method
+                <SortIcon column="method" />
+              </div>
+            </div>
+          )}
+
+          <div className="overflow-y-auto max-h-[590px]">
+            {sortedPayments.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-sm">No payments recorded</div>
+            ) : (
+              <ul className="divide-y divide-gray-200">
+                {sortedPayments.map((payment) => {
+                  const isSelected = selectedPayment?.id === payment.id
+                  return (
+                    <li
+                      key={payment.id}
+                      onClick={() => setSelectedPayment(payment)}
+                      className={`cursor-pointer transition-colors ${isSelected ? 'bg-indigo-100 border-l-4 border-indigo-700 pl-4 pr-4 py-3' : 'hover:bg-indigo-50 p-4 pl-[17px]'}`}
+                    >
+                      <div className="grid grid-cols-12 gap-4 items-center">
+                        <div className="col-span-4">
+                          <p className="text-sm font-medium text-gray-900">
+                            {payment.student.firstName} {payment.student.lastName}
+                          </p>
+                        </div>
+                        <div className="col-span-3">
+                          <span className="text-sm text-gray-900">${parseFloat(payment.amount).toFixed(2)}</span>
+                        </div>
+                        <div className="col-span-3">
+                          <span className="text-sm text-gray-900">
+                            {new Date(payment.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                          </span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-sm text-gray-700 capitalize">
+                            {payment.method}
+                          </span>
+                        </div>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         </div>
-      ) : (
-        <div className="bg-white shadow overflow-hidden rounded-lg">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th 
-                  onClick={() => sortData('studentName')}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                >
-                  <div className="flex items-center gap-1">
-                    Student
-                    <SortIcon column="studentName" />
+
+        {/* Details Panel */}
+        <div className="bg-white rounded-lg shadow" style={{ height: '708px' }}>
+          {selectedPayment ? (
+            <>
+              <div className="p-4 border-b border-gray-200">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {selectedPayment.student.firstName} {selectedPayment.student.lastName}
+                    </h2>
+                    <p className="text-sm text-gray-500 mt-1">Payment Details</p>
                   </div>
-                </th>
-                <th 
-                  onClick={() => sortData('amount')}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                >
-                  <div className="flex items-center gap-1">
-                    Amount
-                    <SortIcon column="amount" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => sortData('date')}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                >
-                  <div className="flex items-center gap-1">
-                    Date
-                    <SortIcon column="date" />
-                  </div>
-                </th>
-                <th 
-                  onClick={() => sortData('method')}
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                >
-                  <div className="flex items-center gap-1">
-                    Method
-                    <SortIcon column="method" />
-                  </div>
-                </th>
-                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {sortedPayments.map((payment) => (
-                <tr 
-                  key={payment.id}
-                  className="hover:bg-gray-50"
-                >
-                  <td 
-                    onClick={() => handleEdit(payment)}
-                    className="px-6 py-2 whitespace-nowrap cursor-pointer"
-                  >
-                    <div className="text-sm font-medium text-gray-900">
-                      {payment.student.firstName} {payment.student.lastName}
-                    </div>
-                  </td>
-                  <td 
-                    onClick={() => handleEdit(payment)}
-                    className="px-6 py-2 whitespace-nowrap cursor-pointer"
-                  >
-                    <div className="text-sm font-semibold text-gray-900">
-                      ${parseFloat(payment.amount).toFixed(2)}
-                    </div>
-                  </td>
-                  <td 
-                    onClick={() => handleEdit(payment)}
-                    className="px-6 py-2 whitespace-nowrap cursor-pointer"
-                  >
-                    <div className="text-sm text-gray-900">
-                      {new Date(payment.date).toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric'
-                      })}
-                    </div>
-                  </td>
-                  <td 
-                    onClick={() => handleEdit(payment)}
-                    className="px-6 py-2 whitespace-nowrap cursor-pointer"
-                  >
-                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                      {payment.method.charAt(0).toUpperCase() + payment.method.slice(1)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-2 whitespace-nowrap text-right text-sm font-medium">
+                  <div className="flex gap-2">
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation()
+                      onClick={() => handleEdit(selectedPayment)}
+                      className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Edit payment"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => {
                         if (window.confirm('Are you sure you want to delete this payment?')) {
-                          handleDeleteDirect(payment.id)
+                          handleDeleteDirect(selectedPayment.id)
+                          setSelectedPayment(null)
                         }
                       }}
-                      className="text-red-600 hover:text-red-900 p-1"
+                      className="p-1.5 rounded-md text-red-600 hover:bg-red-50 transition-colors"
                       title="Delete payment"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 space-y-2.5 overflow-y-auto" style={{ height: 'calc(100% - 80px)' }}>
+                {/* Amount */}
+                <div className="space-y-1.5">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Amount</h3>
+                  <div className="flex items-center gap-2 text-sm">
+                    <DollarSign className="h-4 w-4 text-gray-400" />
+                    <span className="text-gray-900">${parseFloat(selectedPayment.amount).toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Date */}
+                <div className="space-y-1.5 pt-2 border-t">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date</h3>
+                  <div className="flex items-center gap-2 text-sm">
+                    <CalendarIcon className="h-4 w-4 text-gray-400" />
+                    <span className="text-gray-900">{new Date(selectedPayment.date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                  </div>
+                </div>
+
+                {/* Method */}
+                <div className="space-y-1.5 pt-2 border-t">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Method</h3>
+                  <div className="text-sm text-gray-700 capitalize">{selectedPayment.method}</div>
+                </div>
+
+                {/* Notes */}
+                <div className="space-y-1.5 pt-2 border-t">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</h3>
+                  <div className="flex items-start gap-2 text-sm">
+                    <FileText className="h-4 w-4 text-gray-400 mt-0.5" />
+                    <p className={`whitespace-pre-wrap ${selectedPayment.notes ? 'text-gray-900' : 'text-gray-400'}`}>
+                      {selectedPayment.notes || '-'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-full p-8 text-center text-gray-500 text-sm">
+              Select a payment to view details
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {showModal && (
         <div className="fixed z-10 inset-0 overflow-y-auto">
@@ -447,6 +564,155 @@ export function Payments() {
                       Save
                     </button>
                   </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Package Modal */}
+      {showPackageModal && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full" onClick={(e) => e.stopPropagation()}>
+              <form onSubmit={handleSubmitPackage}>
+                <div className="bg-white px-6 pt-5 pb-4">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900">Add Package</h3>
+                    <button
+                      type="button"
+                      onClick={() => { setShowPackageModal(false); resetPackageForm(); }}
+                      className="text-gray-400 hover:text-gray-500"
+                    >
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Student */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
+                      <div className="flex-1">
+                        <select
+                          required
+                          value={packageForm.studentId}
+                          onChange={(e) => setPackageForm({ ...packageForm, studentId: e.target.value })}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        >
+                          <option value="">Select student</option>
+                          {students.map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.firstName} {s.lastName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Package Name */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
+                      <input
+                        type="text"
+                        required
+                        value={packageForm.name}
+                        onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        placeholder="e.g., 10-Lesson Package"
+                      />
+                    </div>
+
+                    {/* Total Lessons */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Lessons</label>
+                      <input
+                        type="number"
+                        min="1"
+                        required
+                        value={packageForm.totalLessons}
+                        onChange={(e) => setPackageForm({ ...packageForm, totalLessons: e.target.value })}
+                        className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        placeholder="10"
+                      />
+                    </div>
+
+                    {/* Price */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
+                      <div className="flex-1 flex items-center gap-1">
+                        <span className="text-sm text-gray-600">$</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          value={packageForm.price}
+                          onChange={(e) => setPackageForm({ ...packageForm, price: e.target.value })}
+                          className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Payment Method */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Method</label>
+                      <div className="flex-1">
+                        <select
+                          required
+                          value={packageForm.method}
+                          onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        >
+                          <option value="venmo">Venmo</option>
+                          <option value="zelle">Zelle</option>
+                          <option value="cash">Cash</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Purchased At */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Purchased</label>
+                      <input
+                        type="date"
+                        required
+                        value={packageForm.purchasedAt}
+                        onChange={(e) => setPackageForm({ ...packageForm, purchasedAt: e.target.value })}
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                      />
+                    </div>
+
+                    {/* Expires At */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Expires</label>
+                      <input
+                        type="date"
+                        value={packageForm.expiresAt}
+                        onChange={(e) => setPackageForm({ ...packageForm, expiresAt: e.target.value })}
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 px-6 py-4 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowPackageModal(false); resetPackageForm(); }}
+                    className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    Save Package
+                  </button>
                 </div>
               </form>
             </div>
