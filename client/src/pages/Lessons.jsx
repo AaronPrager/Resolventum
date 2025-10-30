@@ -879,7 +879,7 @@ export function Lessons() {
                         <div>
                           <label className="block text-sm font-medium text-gray-700">Video Call Link</label>
                           <a 
-                            href={formData.link} 
+                            href={formData.link.startsWith('http://') || formData.link.startsWith('https://') ? formData.link : `https://${formData.link}`}
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="mt-1 text-sm text-indigo-600 hover:text-indigo-800 underline break-all"
