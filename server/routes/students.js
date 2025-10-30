@@ -72,8 +72,15 @@ router.post(
   [
     body('firstName').notEmpty().withMessage('First name required'),
     body('lastName').notEmpty().withMessage('Last name required'),
-    body('phone').optional().isMobilePhone(),
-    body('email').optional().isEmail()
+    body('dateOfBirth').optional({ checkFalsy: true }).isISO8601(),
+    body('phone').optional({ checkFalsy: true }),
+    body('address').optional({ checkFalsy: true }),
+    body('schoolName').optional({ checkFalsy: true }),
+    body('subject').optional({ checkFalsy: true }),
+    body('parentFullName').optional({ checkFalsy: true }),
+    body('parentPhone').optional({ checkFalsy: true }),
+    body('parentEmail').optional({ checkFalsy: true }).isEmail(),
+    body('email').optional({ checkFalsy: true }).isEmail()
   ],
   async (req, res) => {
     try {
@@ -82,14 +89,37 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Only include fields that exist in the database schema
+      const studentData = {
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        dateOfBirth: req.body.dateOfBirth,
+        email: req.body.email,
+        phone: req.body.phone,
+        address: req.body.address,
+        schoolName: req.body.schoolName,
+        grade: req.body.grade,
+        subject: req.body.subject,
+        difficulties: req.body.difficulties,
+        pricePerLesson: req.body.pricePerLesson,
+        pricePerPackage: req.body.pricePerPackage,
+        parentFullName: req.body.parentFullName,
+        parentAddress: req.body.parentAddress,
+        parentPhone: req.body.parentPhone,
+        parentEmail: req.body.parentEmail,
+        emergencyContactInfo: req.body.emergencyContactInfo,
+        notes: req.body.notes
+      };
+
       const student = await prisma.student.create({
-        data: req.body
+        data: studentData
       });
 
       res.status(201).json(student);
     } catch (error) {
       console.error('Create student error:', error);
-      res.status(500).json({ message: 'Error creating student' });
+      console.error('Error details:', error.message);
+      res.status(500).json({ message: 'Error creating student', error: error.message });
     }
   }
 );
@@ -97,15 +127,38 @@ router.post(
 // Update student
 router.put('/:id', async (req, res) => {
   try {
+    // Only include fields that exist in the database schema
+    const studentData = {
+      firstName: req.body.firstName,
+      lastName: req.body.lastName,
+      dateOfBirth: req.body.dateOfBirth,
+      email: req.body.email,
+      phone: req.body.phone,
+      address: req.body.address,
+      schoolName: req.body.schoolName,
+      grade: req.body.grade,
+      subject: req.body.subject,
+      difficulties: req.body.difficulties,
+      pricePerLesson: req.body.pricePerLesson,
+      pricePerPackage: req.body.pricePerPackage,
+      parentFullName: req.body.parentFullName,
+      parentAddress: req.body.parentAddress,
+      parentPhone: req.body.parentPhone,
+      parentEmail: req.body.parentEmail,
+      emergencyContactInfo: req.body.emergencyContactInfo,
+      notes: req.body.notes
+    };
+
     const student = await prisma.student.update({
       where: { id: req.params.id },
-      data: req.body
+      data: studentData
     });
 
     res.json(student);
   } catch (error) {
     console.error('Update student error:', error);
-    res.status(500).json({ message: 'Error updating student' });
+    console.error('Error details:', error.message);
+    res.status(500).json({ message: 'Error updating student', error: error.message });
   }
 });
 

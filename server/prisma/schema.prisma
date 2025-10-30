@@ -21,11 +21,29 @@ model User {
 
 model Student {
   id          String   @id @default(uuid())
+  // Student Details
   firstName   String
   lastName    String
+  dateOfBirth DateTime?
   email       String?
   phone       String?
   address     String?
+  schoolName  String?
+  grade       String?
+  subject     String?
+  difficulties String?  // Learning difficulties or areas of struggle
+  pricePerLesson Float?  // Price per individual lesson
+  pricePerPackage Float? // Price per package of 10 lessons
+  
+  // Parent Details
+  parentFullName String?
+  parentAddress  String?  // If different from student
+  parentPhone    String?
+  parentEmail    String?
+  
+  // Emergency Contact (if different from parent)
+  emergencyContactInfo String?
+  
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -46,11 +64,20 @@ model Lesson {
   notes     String?
   status    String   @default("scheduled") // scheduled, completed, cancelled, rescheduled
   price     Float    // individual lesson price
+  locationType String  @default("in-person") // remote, in-person
+  link      String?  // Video call link for remote lessons
+  isRecurring Boolean @default(false)
+  recurringFrequency String? // daily, weekly, monthly, yearly
+  recurringEndDate DateTime?
+  recurringGroupId String? // Groups recurring lessons together
+  // iCal-style options
+  allDay    Boolean @default(false) // All-day event
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([studentId])
   @@index([dateTime])
+  @@index([recurringGroupId])
 }
 
 model Package {

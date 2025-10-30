@@ -1,7 +1,6 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { 
-  Home, 
   Users, 
   Calendar as CalendarIcon, 
   DollarSign, 
@@ -15,10 +14,9 @@ export function Layout() {
   const location = useLocation()
 
   const navItems = [
-    { path: '/', icon: Home, label: 'Dashboard' },
+    { path: '/', icon: CalendarIcon, label: 'Calendar' },
     { path: '/students', icon: Users, label: 'Students' },
     { path: '/lessons', icon: Clock, label: 'Lessons' },
-    { path: '/calendar', icon: CalendarIcon, label: 'Calendar' },
     { path: '/payments', icon: DollarSign, label: 'Payments' },
     { path: '/reports', icon: FileText, label: 'Reports' }
   ]
