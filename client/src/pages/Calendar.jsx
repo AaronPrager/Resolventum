@@ -548,10 +548,10 @@ export function Calendar() {
                       key={lesson.id}
                       onClick={() => setSelectedLesson(lesson)}
                       onDoubleClick={() => handleSelectEvent({ lesson })}
-                      className={`p-4 cursor-pointer transition-colors ${
+                      className={`cursor-pointer transition-colors ${
                         isSelected 
-                          ? 'bg-indigo-50 border-l-4 border-indigo-600' 
-                          : 'hover:bg-gray-50 border-l-4 border-transparent'
+                          ? 'bg-indigo-50 border-l-4 border-indigo-600 pl-4 pr-4 py-4' 
+                          : 'hover:bg-gray-50 p-4'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
