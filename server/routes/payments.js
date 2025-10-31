@@ -12,8 +12,16 @@ router.get('/', async (req, res) => {
   try {
     const { startDate, endDate, studentId } = req.query;
 
-    const where = {};
-    if (studentId) where.studentId = studentId;
+    const where = { userId: req.user.id };
+    if (studentId) {
+      // Verify student belongs to user
+      const student = await prisma.student.findFirst({
+        where: { id: studentId, userId: req.user.id }
+      });
+      if (student) {
+        where.studentId = studentId;
+      }
+    }
     if (startDate && endDate) {
       where.date = {
         gte: new Date(startDate),
@@ -51,8 +59,20 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Verify student belongs to user
+      const student = await prisma.student.findFirst({
+        where: { id: req.body.studentId, userId: req.user.id }
+      });
+
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+
       const payment = await prisma.payment.create({
-        data: req.body,
+        data: {
+          ...req.body,
+          userId: req.user.id
+        },
         include: {
           student: true
         }
@@ -69,6 +89,25 @@ router.post(
 // Update payment
 router.put('/:id', async (req, res) => {
   try {
+    // Verify payment belongs to user
+    const existing = await prisma.payment.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    // If studentId is being changed, verify new student belongs to user
+    if (req.body.studentId && req.body.studentId !== existing.studentId) {
+      const student = await prisma.student.findFirst({
+        where: { id: req.body.studentId, userId: req.user.id }
+      });
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+    }
+
     const payment = await prisma.payment.update({
       where: { id: req.params.id },
       data: req.body,
@@ -87,6 +126,15 @@ router.put('/:id', async (req, res) => {
 // Delete payment
 router.delete('/:id', async (req, res) => {
   try {
+    // Verify payment belongs to user
+    const payment = await prisma.payment.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
     await prisma.payment.delete({
       where: { id: req.params.id }
     });

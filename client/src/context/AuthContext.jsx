@@ -45,18 +45,18 @@ export function AuthProvider({ children }) {
     }
   }
 
-  const register = async (email, password, name) => {
+  const register = async (email, password, name, companyName, phone) => {
     try {
-      const { data } = await api.post('/auth/register', { email, password, name })
+      const { data } = await api.post('/auth/register', { email, password, name, companyName, phone })
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
       api.defaults.headers.common['Authorization'] = `Bearer ${data.token}`
       setUser(data.user)
-      toast.success('Registration successful!')
-      return true
+      toast.success('Registration successful! Check verification link.')
+      return { ok: true, verification: data.verification }
     } catch (error) {
       toast.error(error.response?.data?.message || 'Registration failed')
-      return false
+      return { ok: false }
     }
   }
 

@@ -11,6 +11,7 @@ router.use(authenticateToken);
 router.get('/', async (req, res) => {
   try {
     const packages = await prisma.package.findMany({
+      where: { userId: req.user.id },
       include: {
         student: true
       },
@@ -27,8 +28,20 @@ router.get('/', async (req, res) => {
 // Get packages for a student
 router.get('/student/:studentId', async (req, res) => {
   try {
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({
+      where: { id: req.params.studentId, userId: req.user.id }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
     const packages = await prisma.package.findMany({
-      where: { studentId: req.params.studentId },
+      where: { 
+        studentId: req.params.studentId,
+        userId: req.user.id
+      },
       orderBy: { purchasedAt: 'desc' }
     });
 
@@ -55,8 +68,20 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
+      // Verify student belongs to user
+      const student = await prisma.student.findFirst({
+        where: { id: req.body.studentId, userId: req.user.id }
+      });
+
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+
       const pkg = await prisma.package.create({
-        data: req.body,
+        data: {
+          ...req.body,
+          userId: req.user.id
+        },
         include: {
           student: true
         }
@@ -73,6 +98,25 @@ router.post(
 // Update package
 router.put('/:id', async (req, res) => {
   try {
+    // Verify package belongs to user
+    const existing = await prisma.package.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Package not found' });
+    }
+
+    // If studentId is being changed, verify new student belongs to user
+    if (req.body.studentId && req.body.studentId !== existing.studentId) {
+      const student = await prisma.student.findFirst({
+        where: { id: req.body.studentId, userId: req.user.id }
+      });
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+    }
+
     const pkg = await prisma.package.update({
       where: { id: req.params.id },
       data: req.body,
@@ -91,6 +135,15 @@ router.put('/:id', async (req, res) => {
 // Mark package as completed (use up remaining lessons)
 router.post('/:id/complete', async (req, res) => {
   try {
+    // Verify package belongs to user
+    const existing = await prisma.package.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Package not found' });
+    }
+
     const pkg = await prisma.package.update({
       where: { id: req.params.id },
       data: {

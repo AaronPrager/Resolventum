@@ -44,8 +44,16 @@ router.get('/', async (req, res) => {
   try {
     const { startDate, endDate, studentId } = req.query;
 
-    const where = {};
-    if (studentId) where.studentId = studentId;
+    const where = { userId: req.user.id };
+    if (studentId) {
+      // Verify student belongs to user
+      const student = await prisma.student.findFirst({
+        where: { id: studentId, userId: req.user.id }
+      });
+      if (student) {
+        where.studentId = studentId;
+      }
+    }
     if (startDate && endDate) {
       where.dateTime = {
         gte: new Date(startDate),
@@ -71,8 +79,11 @@ router.get('/', async (req, res) => {
 // Get single lesson
 router.get('/:id', async (req, res) => {
   try {
-    const lesson = await prisma.lesson.findUnique({
-      where: { id: req.params.id },
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      },
       include: {
         student: true
       }
@@ -125,12 +136,22 @@ router.post(
         return d < new Date() ? 'completed' : 'scheduled';
       };
 
+      // Verify student belongs to user
+      const student = await prisma.student.findFirst({
+        where: { id: studentId, userId: req.user.id }
+      });
+
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
         const recurringGroupId = uuidv4();
         const dates = calculateRecurringDates(dateTime, recurringFrequency, recurringEndDate);
         
         const lessonsData = dates.map(date => ({
+          userId: req.user.id,
           studentId,
           dateTime: date,
           duration,
@@ -159,6 +180,7 @@ router.post(
             // Get student's active packages ordered by purchasedAt
             const pkgs = await prisma.package.findMany({
               where: {
+                userId: req.user.id,
                 studentId,
                 OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
               },
@@ -188,6 +210,7 @@ router.post(
       } else {
         // Create a single lesson
         const lessonData = {
+          userId: req.user.id,
           studentId,
           dateTime: new Date(dateTime),
           duration,
@@ -216,6 +239,7 @@ router.post(
         try {
           const pkg = await prisma.package.findFirst({
             where: {
+              userId: req.user.id,
               studentId,
               OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
             },
@@ -249,12 +273,26 @@ router.put('/:id', async (req, res) => {
       allDay
     } = req.body;
 
-    const currentLesson = await prisma.lesson.findUnique({
-      where: { id: req.params.id }
+    // Verify lesson belongs to user
+    const currentLesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
     });
 
     if (!currentLesson) {
       return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // If studentId is being changed, verify new student belongs to user
+    if (studentId && studentId !== currentLesson.studentId) {
+      const student = await prisma.student.findFirst({
+        where: { id: studentId, userId: req.user.id }
+      });
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
     }
 
     const updateData = {
@@ -389,9 +427,12 @@ router.put('/:id', async (req, res) => {
 // Update this and all future recurring lessons
 router.put('/:id/recurring-future', async (req, res) => {
   try {
-    // Get the lesson to find its recurring group and date
-    const lesson = await prisma.lesson.findUnique({
-      where: { id: req.params.id }
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
     });
 
     if (!lesson || !lesson.recurringGroupId) {
@@ -423,6 +464,7 @@ router.put('/:id/recurring-future', async (req, res) => {
       await prisma.lesson.deleteMany({
         where: {
           recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
           dateTime: {
             gt: lesson.dateTime
           }
@@ -440,6 +482,7 @@ router.put('/:id/recurring-future', async (req, res) => {
         // Create new lessons with the new frequency (skip first date as it's the current lesson)
         if (newDates.length > 1) {
           const newLessons = newDates.slice(1).map(date => ({
+            userId: req.user.id,
             studentId: updateData.studentId,
             dateTime: date,
             duration: updateData.duration,
@@ -476,6 +519,7 @@ router.put('/:id/recurring-future', async (req, res) => {
       const totalCount = await prisma.lesson.count({
         where: {
           recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
           dateTime: {
             gte: lesson.dateTime
           }
@@ -500,6 +544,7 @@ router.put('/:id/recurring-future', async (req, res) => {
       await prisma.lesson.updateMany({
         where: {
           recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
           dateTime: {
             gte: lesson.dateTime
           }
@@ -512,7 +557,8 @@ router.put('/:id/recurring-future', async (req, res) => {
         // Get all existing lessons to find the last one
         const existingLessons = await prisma.lesson.findMany({
           where: {
-            recurringGroupId: lesson.recurringGroupId
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id
           },
           orderBy: {
             dateTime: 'desc'
@@ -534,6 +580,7 @@ router.put('/:id/recurring-future', async (req, res) => {
 
           if (dates.length > 0) {
             const newLessons = dates.map(date => ({
+              userId: req.user.id,
               studentId: updateData.studentId,
               dateTime: date,
               duration: updateData.duration,
@@ -563,6 +610,7 @@ router.put('/:id/recurring-future', async (req, res) => {
         await prisma.lesson.deleteMany({
           where: {
             recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
             dateTime: {
               gt: newEndDate
             }
@@ -574,6 +622,7 @@ router.put('/:id/recurring-future', async (req, res) => {
       const totalCount = await prisma.lesson.count({
         where: {
           recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
           dateTime: {
             gte: lesson.dateTime
           }
@@ -589,6 +638,7 @@ router.put('/:id/recurring-future', async (req, res) => {
       const result = await prisma.lesson.updateMany({
         where: {
           recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
           dateTime: {
             gte: lesson.dateTime
           }
@@ -610,9 +660,12 @@ router.put('/:id/recurring-future', async (req, res) => {
 // Delete this and all future recurring lessons
 router.delete('/:id/recurring-future', async (req, res) => {
   try {
-    // Get the lesson to find its recurring group and date
-    const lesson = await prisma.lesson.findUnique({
-      where: { id: req.params.id }
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
     });
 
     if (!lesson || !lesson.recurringGroupId) {
@@ -623,6 +676,7 @@ router.delete('/:id/recurring-future', async (req, res) => {
     const result = await prisma.lesson.deleteMany({
       where: {
         recurringGroupId: lesson.recurringGroupId,
+        userId: req.user.id,
         dateTime: {
           gte: lesson.dateTime
         }
@@ -642,6 +696,18 @@ router.delete('/:id/recurring-future', async (req, res) => {
 // Delete lesson
 router.delete('/:id', async (req, res) => {
   try {
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!lesson) {
+      return res.status(404).json({ message: 'Lesson not found' });
+    }
+
     await prisma.lesson.delete({
       where: { id: req.params.id }
     });
@@ -665,6 +731,7 @@ router.get('/upcoming/tomorrow', async (req, res) => {
 
     const lessons = await prisma.lesson.findMany({
       where: {
+        userId: req.user.id,
         dateTime: {
           gte: tomorrow,
           lte: dayAfter

@@ -20,15 +20,18 @@ router.get('/summary', async (req, res) => {
     const { start, end } = getCurrentMonthRange();
       const now = new Date();
 
+    const userId = req.user.id;
+
     // Total income this month
     const paymentsThisMonth = await prisma.payment.aggregate({
       _sum: { amount: true },
-      where: { date: { gte: start, lte: end } },
+      where: { userId, date: { gte: start, lte: end } },
     });
 
     // Lessons completed this month (past and not canceled count as completed)
     const lessonsCompleted = await prisma.lesson.count({
       where: {
+        userId,
         dateTime: { gte: start, lte: end },
         AND: [
           { NOT: { status: { in: ['cancelled', 'canceled'] } } },
@@ -43,12 +46,13 @@ router.get('/summary', async (req, res) => {
     });
 
     // Total students (all time)
-    const totalStudents = await prisma.student.count();
+    const totalStudents = await prisma.student.count({ where: { userId } });
 
     // Outstanding balances overall: billed (completed lessons price) - paid (all payments)
     // Compute billed from completed or past-scheduled, with fallback to student's price if lesson.price null/0
     const billedLessons = await prisma.lesson.findMany({
       where: {
+        userId,
         AND: [
           { NOT: { status: { in: ['cancelled', 'canceled'] } } },
           {
@@ -62,14 +66,14 @@ router.get('/summary', async (req, res) => {
       select: { price: true, studentId: true },
     });
     const studentPrices = new Map(
-      (await prisma.student.findMany({ select: { id: true, pricePerLesson: true } }))
+      (await prisma.student.findMany({ where: { userId }, select: { id: true, pricePerLesson: true } }))
         .map(s => [s.id, s.pricePerLesson || 0])
     );
     const billedTotal = billedLessons.reduce((sum, l) => {
       const p = (l.price ?? 0) || (studentPrices.get(l.studentId) || 0);
       return sum + p;
     }, 0);
-    const paidAgg = await prisma.payment.aggregate({ _sum: { amount: true } });
+    const paidAgg = await prisma.payment.aggregate({ where: { userId }, _sum: { amount: true } });
 
     const outstandingBalances = billedTotal - (paidAgg._sum.amount ?? 0);
 
@@ -90,10 +94,12 @@ router.get('/outstanding', async (req, res) => {
   try {
     // Fetch necessary data
     const now = new Date();
+    const userId = req.user.id;
     const [students, lessons, payments] = await Promise.all([
-      prisma.student.findMany({ select: { id: true, firstName: true, lastName: true } }),
+      prisma.student.findMany({ where: { userId }, select: { id: true, firstName: true, lastName: true } }),
       prisma.lesson.findMany({
         where: {
+          userId,
           AND: [
             { NOT: { status: { in: ['cancelled', 'canceled'] } } },
             {
@@ -107,6 +113,7 @@ router.get('/outstanding', async (req, res) => {
         select: { id: true, studentId: true, price: true },
       }),
       prisma.payment.findMany({
+        where: { userId },
         select: { id: true, studentId: true, amount: true, date: true },
       }),
     ]);
@@ -129,7 +136,7 @@ router.get('/outstanding', async (req, res) => {
     const studentPriceMap = new Map(
       students.map(s => [s.id, 0])
     );
-    const studentPriceFromDb = await prisma.student.findMany({ select: { id: true, pricePerLesson: true } });
+    const studentPriceFromDb = await prisma.student.findMany({ where: { userId }, select: { id: true, pricePerLesson: true } });
     studentPriceFromDb.forEach(s => studentPriceMap.set(s.id, s.pricePerLesson || 0));
 
     const rows = students.map(s => {
@@ -166,6 +173,7 @@ router.get('/outstanding', async (req, res) => {
 router.get('/payments/recent', async (req, res) => {
   try {
     const items = await prisma.payment.findMany({
+      where: { userId: req.user.id },
       orderBy: { date: 'desc' },
       take: 10,
       include: { student: { select: { firstName: true, lastName: true } } },
@@ -195,10 +203,12 @@ router.get('/monthly', async (req, res) => {
 
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0, 23, 59, 59);
+    const userId = req.user.id;
 
     // Get all lessons for the month
     const lessons = await prisma.lesson.findMany({
       where: {
+        userId,
         dateTime: { gte: startDate, lte: endDate },
         ...(studentId ? { studentId } : {})
       },
@@ -210,6 +220,7 @@ router.get('/monthly', async (req, res) => {
     // Get all payments
     const payments = await prisma.payment.findMany({
       where: {
+        userId,
         date: { gte: startDate, lte: endDate },
         ...(studentId ? { studentId } : {})
       },
@@ -220,10 +231,13 @@ router.get('/monthly', async (req, res) => {
 
     // Get all students with activity this month
     const students = await prisma.student.findMany({
-      where: studentId ? { id: studentId } : undefined,
+      where: {
+        userId,
+        ...(studentId ? { id: studentId } : {})
+      },
       include: {
-        lessons: { where: { dateTime: { gte: startDate, lte: endDate } } },
-        payments: { where: { date: { gte: startDate, lte: endDate } } }
+        lessons: { where: { userId, dateTime: { gte: startDate, lte: endDate } } },
+        payments: { where: { userId, date: { gte: startDate, lte: endDate } } }
       }
     });
 
@@ -275,9 +289,18 @@ router.get('/monthly-student', async (req, res) => {
     const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
     const end = new Date(y, m, 0, 23, 59, 59, 999);
     const now = new Date();
+    const userId = req.user.id;
 
-    // Student price fallback map
-    const student = await prisma.student.findUnique({ where: { id: studentId }, select: { pricePerLesson: true, firstName: true, lastName: true } });
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({ 
+      where: { id: studentId, userId }, 
+      select: { pricePerLesson: true, firstName: true, lastName: true } 
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
     const fallbackPrice = student?.pricePerLesson || 0;
 
     // Previous balance: billed through end of prior month minus payments through end of prior month
@@ -285,6 +308,7 @@ router.get('/monthly-student', async (req, res) => {
 
     const prevLessons = await prisma.lesson.findMany({
       where: {
+        userId,
         studentId,
         dateTime: { lte: prevEnd },
         NOT: { status: { in: ['cancelled', 'canceled'] } },
@@ -296,7 +320,7 @@ router.get('/monthly-student', async (req, res) => {
 
     const prevPaymentsAgg = await prisma.payment.aggregate({
       _sum: { amount: true },
-      where: { studentId, date: { lte: prevEnd } }
+      where: { userId, studentId, date: { lte: prevEnd } }
     });
     const prevPaid = prevPaymentsAgg._sum.amount || 0;
     const previousBalance = prevBilled - prevPaid;
@@ -304,6 +328,7 @@ router.get('/monthly-student', async (req, res) => {
     // In-month billed (completed or past), not canceled
     const monthLessons = await prisma.lesson.findMany({
       where: {
+        userId,
         studentId,
         dateTime: { gte: start, lte: end },
         NOT: { status: { in: ['cancelled', 'canceled'] } }
@@ -319,7 +344,7 @@ router.get('/monthly-student', async (req, res) => {
 
     // Payments this month
     const payments = await prisma.payment.findMany({
-      where: { studentId, date: { gte: start, lte: end } },
+      where: { userId, studentId, date: { gte: start, lte: end } },
       orderBy: { date: 'desc' }
     });
     const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);

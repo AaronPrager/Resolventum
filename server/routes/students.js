@@ -12,6 +12,7 @@ router.use(authenticateToken);
 router.get('/', async (req, res) => {
   try {
     const students = await prisma.student.findMany({
+      where: { userId: req.user.id },
       include: {
         lessons: {
           orderBy: { dateTime: 'desc' },
@@ -40,8 +41,11 @@ router.get('/', async (req, res) => {
 // Get single student
 router.get('/:id', async (req, res) => {
   try {
-    const student = await prisma.student.findUnique({
-      where: { id: req.params.id },
+    const student = await prisma.student.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      },
       include: {
         lessons: {
           orderBy: { dateTime: 'desc' }
@@ -91,6 +95,7 @@ router.post(
 
       // Only include fields that exist in the database schema
       const studentData = {
+        userId: req.user.id,
         firstName: req.body.firstName,
         lastName: req.body.lastName,
         dateOfBirth: req.body.dateOfBirth,
@@ -127,6 +132,15 @@ router.post(
 // Update student
 router.put('/:id', async (req, res) => {
   try {
+    // Verify student belongs to user
+    const existing = await prisma.student.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
     // Only include fields that exist in the database schema
     const studentData = {
       firstName: req.body.firstName,
@@ -165,6 +179,15 @@ router.put('/:id', async (req, res) => {
 // Delete student
 router.delete('/:id', async (req, res) => {
   try {
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
     await prisma.student.delete({
       where: { id: req.params.id }
     });

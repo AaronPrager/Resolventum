@@ -16,6 +16,7 @@ export function Register() {
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [verificationToken, setVerificationToken] = useState('')
 
   const onChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
 
@@ -39,8 +40,10 @@ export function Register() {
     try {
       setLoading(true)
       // Backend currently stores name, email, password; optional fields reserved for future
-      const ok = await register(form.email, form.password, form.name)
-      if (ok) navigate('/')
+      const res = await register(form.email, form.password, form.name, form.companyName, form.phone)
+      if (res?.ok) {
+        setVerificationToken(res?.verification?.token || '')
+      }
     } catch (e) {
       setError('Registration failed')
     } finally {
@@ -94,6 +97,18 @@ export function Register() {
             {loading ? 'Creating...' : 'Create account'}
           </button>
         </form>
+
+        {verificationToken && (
+          <div className="mt-6 p-4 rounded-md border border-indigo-200 bg-indigo-50 text-sm text-indigo-800">
+            <div className="font-medium mb-1">Verify your email</div>
+            <div className="mb-3">Use this link to verify in this development environment:</div>
+            <div className="break-all mb-3">/api/auth/verify?token={verificationToken}</div>
+            <div className="flex gap-3">
+              <a href={`/api/auth/verify?token=${verificationToken}`} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Open Verify Link</a>
+              <button onClick={() => navigate('/')} className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50">Go to App</button>
+            </div>
+          </div>
+        )}
 
         <div className="mt-4 text-sm text-gray-600">
           Already have an account?{' '}

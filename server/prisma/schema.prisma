@@ -15,12 +15,23 @@ model User {
   email     String   @unique
   password  String
   name      String
+  companyName String?
+  phone       String?
+  verified    Boolean  @default(false)
+  verificationToken String?
+  verificationTokenExpires DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  students  Student[]
+  lessons   Lesson[]
+  payments  Payment[]
+  packages  Package[]
 }
 
 model Student {
   id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Student Details
   firstName   String
   lastName    String
@@ -51,11 +62,14 @@ model Student {
   packages    Package[]
   payments    Payment[]
 
+  @@index([userId])
   @@index([firstName, lastName])
 }
 
 model Lesson {
   id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId String
   student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   dateTime  DateTime
@@ -75,6 +89,7 @@ model Lesson {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([userId])
   @@index([studentId])
   @@index([dateTime])
   @@index([recurringGroupId])
@@ -82,6 +97,8 @@ model Lesson {
 
 model Package {
   id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   name        String
@@ -94,11 +111,14 @@ model Package {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@index([userId])
   @@index([studentId])
 }
 
 model Payment {
   id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   amount      Float
@@ -108,6 +128,7 @@ model Payment {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  @@index([userId])
   @@index([studentId])
   @@index([date])
 }

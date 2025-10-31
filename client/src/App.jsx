@@ -7,6 +7,8 @@ import { Lessons } from './pages/Lessons'
 import { Calendar } from './pages/Calendar'
 import { Payments } from './pages/Payments'
 import { Reports } from './pages/Reports'
+import { Account } from './pages/Account'
+import { Verify } from './pages/Verify'
 import { Layout } from './components/Layout'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
@@ -38,6 +40,8 @@ function AppRoutes() {
         <Route path="lessons" element={<ProtectedRoute><Lessons /></ProtectedRoute>} />
         <Route path="payments" element={<ProtectedRoute><Payments /></ProtectedRoute>} />
         <Route path="reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+        <Route path="account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
+        <Route path="verify" element={<Verify />} />
       </Route>
     </Routes>
   )
