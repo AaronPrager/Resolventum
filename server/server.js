@@ -2,7 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
+// Import Prisma client (handles serverless properly)
 import './prisma/client.js';
+// Import scheduled jobs (will skip in Vercel)
 import { initializeScheduledJobs } from './jobs/reminderScheduler.js';
 
 // Import routes
@@ -14,7 +16,10 @@ import paymentsRoutes from './routes/payments.js';
 import invoicesRoutes from './routes/invoices.js';
 import reportsRoutes from './routes/reports.js';
 
-dotenv.config();
+// Load environment variables (only needed locally, Vercel provides them automatically)
+if (process.env.VERCEL !== '1') {
+  dotenv.config();
+}
 
 const app = express();
 const PORT = process.env.PORT || 5000;

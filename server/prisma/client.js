@@ -2,7 +2,9 @@ import { PrismaClient } from '@prisma/client';
 
 let prisma;
 
-if (process.env.NODE_ENV === 'production') {
+// For serverless (Vercel), always create a new instance
+// For local dev, reuse to avoid too many connections
+if (process.env.VERCEL === '1') {
   prisma = new PrismaClient();
 } else {
   if (!global.prisma) {
