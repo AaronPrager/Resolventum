@@ -1,7 +1,8 @@
-import { createServer } from '@vercel/node';
+// Vercel serverless function entry point
+// Import the Express app (ES module)
 import app from '../server/server.js';
 
-// Create serverless handler for Vercel
-// This preserves the full path for Express routing
-export default createServer(app);
+// Export the app directly for Vercel
+// Vercel will automatically handle the Express app
+export default app;
 
