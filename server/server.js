@@ -3,15 +3,19 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 
+// Detect if running in Vercel/serverless (auto-detect if VERCEL env var not set)
+const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_URL || process.env.VERCEL_REGION;
+
 // Load environment variables (only needed locally, Vercel provides them automatically)
-if (process.env.VERCEL !== '1') {
+if (!isVercel) {
   dotenv.config();
 }
 
-// Log environment check (for debugging in Vercel)
-if (process.env.VERCEL === '1') {
-  console.log('Vercel Environment Check:', {
+// Log environment check (for debugging in serverless environments)
+if (isVercel) {
+  console.log('Serverless Environment Check:', {
     VERCEL: process.env.VERCEL,
+    VERCEL_URL: process.env.VERCEL_URL,
     NODE_ENV: process.env.NODE_ENV,
     HAS_DATABASE_URL: !!process.env.DATABASE_URL,
     HAS_JWT_SECRET: !!process.env.JWT_SECRET ? 'Set' : 'Missing',
@@ -82,8 +86,8 @@ app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-// Only start server if not in Vercel (for local development)
-if (process.env.VERCEL !== '1') {
+// Only start server if not in serverless environment (for local development)
+if (!isVercel) {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     // Initialize scheduled jobs (SMS reminders)

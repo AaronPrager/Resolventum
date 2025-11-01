@@ -13,6 +13,9 @@
     "db:generate": "cd server && npm run db:generate",
     "db:studio": "cd server && npm run db:studio"
   },
+  "dependencies": {
+    "@vercel/node": "^5.5.3"
+  },
   "devDependencies": {
     "concurrently": "^8.2.2"
   }

@@ -16,9 +16,11 @@ if (!process.env.DATABASE_URL) {
 } else {
   // For serverless (Vercel), always create a new instance
   // For local dev, reuse to avoid too many connections
+  // Also treat as serverless if running in a serverless environment (AWS Lambda, Vercel, etc.)
   try {
-    if (process.env.VERCEL === '1') {
-      console.log('Initializing Prisma Client for Vercel serverless');
+    const isServerless = process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME || !global;
+    if (isServerless) {
+      console.log('Initializing Prisma Client for serverless environment');
       prisma = new PrismaClient({
         log: ['error', 'warn'],
       });

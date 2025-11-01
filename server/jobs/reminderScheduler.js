@@ -24,10 +24,11 @@ if (hasTwilioConfig) {
 }
 
 export function initializeScheduledJobs() {
-  // Skip scheduled jobs in Vercel serverless environment
+  // Skip scheduled jobs in serverless environments (Vercel, AWS Lambda, etc.)
   // Use Vercel Cron Jobs or external cron service instead
-  if (process.env.VERCEL === '1') {
-    console.log('Scheduled jobs skipped (Vercel serverless - use Vercel Cron Jobs)');
+  const isServerless = process.env.VERCEL === '1' || process.env.VERCEL_URL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  if (isServerless) {
+    console.log('Scheduled jobs skipped (serverless environment - use Vercel Cron Jobs)');
     return;
   }
 
