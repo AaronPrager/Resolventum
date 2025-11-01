@@ -64,11 +64,8 @@ if (process.env.VERCEL !== '1') {
     // Initialize scheduled jobs (SMS reminders)
     initializeScheduledJobs();
   });
-} else {
-  console.log('Running in Vercel serverless environment');
-  // Note: Scheduled jobs (SMS reminders) won't run in serverless
-  // Consider using Vercel Cron Jobs or external cron service
 }
 
+// Always export app (for both local and Vercel)
 export default app;
 
