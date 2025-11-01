@@ -2,8 +2,26 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
+
+// Load environment variables (only needed locally, Vercel provides them automatically)
+if (process.env.VERCEL !== '1') {
+  dotenv.config();
+}
+
+// Log environment check (for debugging in Vercel)
+if (process.env.VERCEL === '1') {
+  console.log('Vercel Environment Check:', {
+    VERCEL: process.env.VERCEL,
+    NODE_ENV: process.env.NODE_ENV,
+    HAS_DATABASE_URL: !!process.env.DATABASE_URL,
+    HAS_JWT_SECRET: !!process.env.JWT_SECRET ? 'Set' : 'Missing',
+    DATABASE_URL_LENGTH: process.env.DATABASE_URL?.length || 0
+  });
+}
+
 // Import Prisma client (handles serverless properly)
 import './prisma/client.js';
+
 // Import scheduled jobs (will skip in Vercel)
 import { initializeScheduledJobs } from './jobs/reminderScheduler.js';
 
@@ -15,11 +33,6 @@ import packagesRoutes from './routes/packages.js';
 import paymentsRoutes from './routes/payments.js';
 import invoicesRoutes from './routes/invoices.js';
 import reportsRoutes from './routes/reports.js';
-
-// Load environment variables (only needed locally, Vercel provides them automatically)
-if (process.env.VERCEL !== '1') {
-  dotenv.config();
-}
 
 const app = express();
 const PORT = process.env.PORT || 5000;
