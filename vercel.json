@@ -1,7 +1,18 @@
 {
-  "buildCommand": "cd client && npm ci && npm run build",
+  "buildCommand": "cd server && npm ci && npx prisma generate && cd ../client && npm ci && npm run build",
   "outputDirectory": "client/dist",
-  "installCommand": "cd client && npm ci",
-  "framework": "vite"
+  "installCommand": "npm install",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api"
+    }
+  ],
+  "functions": {
+    "api/index.js": {
+      "runtime": "nodejs18.x"
+    }
+  }
 }
 
