@@ -24,6 +24,13 @@ if (hasTwilioConfig) {
 }
 
 export function initializeScheduledJobs() {
+  // Skip scheduled jobs in Vercel serverless environment
+  // Use Vercel Cron Jobs or external cron service instead
+  if (process.env.VERCEL === '1') {
+    console.log('Scheduled jobs skipped (Vercel serverless - use Vercel Cron Jobs)');
+    return;
+  }
+
   if (!hasTwilioConfig) {
     console.log('Scheduled jobs initialized (SMS reminders disabled)');
     return;

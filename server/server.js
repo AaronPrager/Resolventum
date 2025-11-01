@@ -52,11 +52,18 @@ app.use((req, res) => {
   res.status(404).json({ message: 'Route not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  // Initialize scheduled jobs (SMS reminders)
-  initializeScheduledJobs();
-});
+// Only start server if not in Vercel (for local development)
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    // Initialize scheduled jobs (SMS reminders)
+    initializeScheduledJobs();
+  });
+} else {
+  console.log('Running in Vercel serverless environment');
+  // Note: Scheduled jobs (SMS reminders) won't run in serverless
+  // Consider using Vercel Cron Jobs or external cron service
+}
 
 export default app;
 
