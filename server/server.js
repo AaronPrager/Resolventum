@@ -39,7 +39,7 @@ import invoicesRoutes from './routes/invoices.js';
 import reportsRoutes from './routes/reports.js';
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5002;
 
 // Middleware
 app.use(helmet());
