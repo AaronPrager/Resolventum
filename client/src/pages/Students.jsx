@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Download } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Students() {
@@ -10,6 +10,8 @@ export function Students() {
   const [selectedStudent, setSelectedStudent] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
+  const [jsonInput, setJsonInput] = useState('')
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -184,6 +186,115 @@ export function Students() {
     }
   }
 
+  const handleImportFromJson = async () => {
+    try {
+      // Parse JSON input
+      const jsonData = JSON.parse(jsonInput)
+      
+      // Map JSON fields to student creation format
+      // This handles variations in field names
+      const studentData = {
+        firstName: jsonData.firstName || jsonData.first_name || jsonData.name?.split(' ')[0] || '',
+        lastName: jsonData.lastName || jsonData.last_name || jsonData.name?.split(' ').slice(1).join(' ') || '',
+        dateOfBirth: jsonData.dateOfBirth || jsonData.date_of_birth || jsonData.dob || null,
+        email: jsonData.email || null,
+        phone: jsonData.phone || jsonData.phoneNumber || null,
+        address: jsonData.address || null,
+        schoolName: jsonData.schoolName || jsonData.school_name || jsonData.school || null,
+        grade: jsonData.grade || null,
+        subject: jsonData.subject || null,
+        difficulties: jsonData.difficulties || jsonData.learningDifficulties || null,
+        pricePerLesson: jsonData.pricePerLesson || jsonData.price_per_lesson || jsonData.pricePerLesson || null,
+        pricePerPackage: jsonData.pricePerPackage || jsonData.price_per_package || jsonData.pricePerPackage || null,
+        parentFullName: jsonData.parentFullName || jsonData.parent_full_name || jsonData.parentName || null,
+        parentAddress: jsonData.parentAddress || jsonData.parent_address || null,
+        parentPhone: jsonData.parentPhone || jsonData.parent_phone || null,
+        parentEmail: jsonData.parentEmail || jsonData.parent_email || null,
+        emergencyContactInfo: jsonData.emergencyContactInfo || jsonData.emergency_contact || jsonData.emergencyContact || null,
+        notes: jsonData.notes || jsonData.note || null
+      }
+
+      // Validate required fields
+      if (!studentData.firstName || !studentData.lastName) {
+        toast.error('JSON must include firstName and lastName (or name)')
+        return
+      }
+
+      // Clean up the data - convert empty strings to null and handle dates
+      const cleanedData = {
+        ...studentData,
+        dateOfBirth: studentData.dateOfBirth ? new Date(studentData.dateOfBirth).toISOString() : null,
+        pricePerLesson: studentData.pricePerLesson ? parseFloat(studentData.pricePerLesson) : null,
+        pricePerPackage: studentData.pricePerPackage ? parseFloat(studentData.pricePerPackage) : null
+      }
+
+      // Create student
+      await api.post('/students', cleanedData)
+      toast.success('Student imported successfully')
+      
+      setShowImportModal(false)
+      setJsonInput('')
+      fetchStudents()
+    } catch (error) {
+      if (error.response) {
+        toast.error(error.response.data?.message || 'Failed to import student')
+      } else if (error instanceof SyntaxError) {
+        toast.error('Invalid JSON format. Please check your JSON syntax.')
+      } else {
+        toast.error('Failed to import student')
+      }
+    }
+  }
+
+  const handleExportToJson = () => {
+    if (!selectedStudent) {
+      toast.error('Please select a student to export')
+      return
+    }
+
+    try {
+      // Create a clean JSON object with only the relevant student fields (exclude internal fields)
+      const exportData = {
+        firstName: selectedStudent.firstName,
+        lastName: selectedStudent.lastName,
+        dateOfBirth: selectedStudent.dateOfBirth || null,
+        email: selectedStudent.email || null,
+        phone: selectedStudent.phone || null,
+        address: selectedStudent.address || null,
+        schoolName: selectedStudent.schoolName || null,
+        grade: selectedStudent.grade || null,
+        subject: selectedStudent.subject || null,
+        difficulties: selectedStudent.difficulties || null,
+        pricePerLesson: selectedStudent.pricePerLesson || null,
+        pricePerPackage: selectedStudent.pricePerPackage || null,
+        parentFullName: selectedStudent.parentFullName || null,
+        parentAddress: selectedStudent.parentAddress || null,
+        parentPhone: selectedStudent.parentPhone || null,
+        parentEmail: selectedStudent.parentEmail || null,
+        emergencyContactInfo: selectedStudent.emergencyContactInfo || null,
+        notes: selectedStudent.notes || null
+      }
+
+      // Convert to JSON string with proper formatting
+      const jsonString = JSON.stringify(exportData, null, 2)
+      
+      // Create a blob and download
+      const blob = new Blob([jsonString], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${selectedStudent.firstName}_${selectedStudent.lastName}_student_data.json`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      
+      toast.success('Student data exported successfully')
+    } catch (error) {
+      toast.error('Failed to export student data')
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       firstName: '',
@@ -227,13 +338,22 @@ export function Students() {
               <h2 className="text-lg font-semibold text-gray-900">Students</h2>
               <p className="text-sm text-gray-500 mt-1">{students.length} {students.length === 1 ? 'student' : 'students'}</p>
             </div>
-            <button
-              onClick={handleAddStudent}
-              className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-              title="Add new student"
-            >
-              <Plus className="h-5 w-5" />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowImportModal(true)}
+                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                title="Import from JSON"
+              >
+                <FileText className="h-5 w-5" />
+              </button>
+              <button
+                onClick={handleAddStudent}
+                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                title="Add new student"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            </div>
           </div>
           
           {/* Sortable Column Headers */}
@@ -362,6 +482,13 @@ export function Students() {
                     <p className="text-sm text-gray-500 mt-1">{selectedStudent.subject || '-'}</p>
                   </div>
                   <div className="flex gap-2">
+                    <button
+                      onClick={handleExportToJson}
+                      className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Export to JSON"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
                     <button
                       onClick={handleEditStudent}
                       className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
@@ -793,6 +920,71 @@ export function Students() {
                   </div>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import from JSON Modal */}
+      {showImportModal && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
+              <div className="bg-white">
+                <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Import Student from JSON
+                  </h3>
+                  <button
+                    onClick={() => {
+                      setShowImportModal(false)
+                      setJsonInput('')
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                
+                <div className="px-6 py-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Paste JSON data here:
+                  </label>
+                  <textarea
+                    value={jsonInput}
+                    onChange={(e) => setJsonInput(e.target.value)}
+                    placeholder='{"firstName": "John", "lastName": "Doe", "email": "john@example.com", "phone": "555-1234", ...}'
+                    rows="15"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  <p className="mt-2 text-xs text-gray-500">
+                    Required fields: firstName, lastName. All other fields are optional.
+                    <br />
+                    Field name variations are supported (e.g., first_name, firstName, name).
+                  </p>
+                </div>
+
+                <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowImportModal(false)
+                      setJsonInput('')
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleImportFromJson}
+                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md"
+                  >
+                    Import Student
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
