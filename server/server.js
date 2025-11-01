@@ -42,9 +42,21 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-// Health check
+// Health check (simple - no database needed)
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Tutoring Management API is running' });
+  try {
+    res.json({ 
+      status: 'ok', 
+      message: 'Tutoring Management API is running',
+      env: {
+        vercel: process.env.VERCEL,
+        hasDatabaseUrl: !!process.env.DATABASE_URL,
+        hasJwtSecret: !!process.env.JWT_SECRET
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Routes
