@@ -10,6 +10,7 @@ export function Payments() {
   const [selectedPayment, setSelectedPayment] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [showPackageModal, setShowPackageModal] = useState(false)
+  const [editingPackage, setEditingPackage] = useState(null)
   const [showPackagesList, setShowPackagesList] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
@@ -84,10 +85,57 @@ export function Payments() {
     }
   }
 
+  const handleDeletePackage = async (pkg) => {
+    const confirmMessage = `Are you sure you want to delete the package "${pkg.name}" for ${pkg.student.firstName} ${pkg.student.lastName}? This action cannot be undone.`
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    try {
+      await api.delete(`/packages/${pkg.id}`)
+      toast.success('Package deleted successfully')
+      await fetchPackages()
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to delete package')
+    }
+  }
+
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     try {
+      // Check if this is a package payment
+      const isPackagePayment = formData.notes && formData.notes.trim().startsWith('Package: ')
+      
+      // Validate package payment if applicable
+      if (isPackagePayment) {
+        const selectedStudent = students.find(s => s.id === formData.studentId)
+        
+        if (!selectedStudent) {
+          toast.error('Please select a student')
+          return
+        }
+        
+        if (!selectedStudent.usePackages) {
+          toast.error('This student does not use packages. Please enable packages for this student first.')
+          return
+        }
+        
+        if (!selectedStudent.pricePerPackage) {
+          toast.error('This student does not have a package price set.')
+          return
+        }
+        
+        const amount = parseFloat(formData.amount)
+        const expectedAmount = parseFloat(selectedStudent.pricePerPackage)
+        const amountDiff = Math.abs(amount - expectedAmount)
+        
+        if (amountDiff > 0.01) {
+          toast.error(`Package payment amount ($${amount.toFixed(2)}) must match student's package price ($${expectedAmount.toFixed(2)})`)
+          return
+        }
+      }
+      
       // Ensure date is properly formatted
       const submitData = {
         ...formData,
@@ -170,6 +218,21 @@ export function Payments() {
       expiresAt: '',
       method: 'venmo'
     })
+    setEditingPackage(null)
+  }
+  
+  const handleEditPackage = (pkg) => {
+    setEditingPackage(pkg)
+    setPackageForm({
+      studentId: pkg.studentId,
+      name: pkg.name,
+      totalHours: pkg.totalHours,
+      price: pkg.price.toString(),
+      purchasedAt: new Date(pkg.purchasedAt).toISOString().split('T')[0],
+      expiresAt: pkg.expiresAt ? new Date(pkg.expiresAt).toISOString().split('T')[0] : '',
+      method: 'venmo'
+    })
+    setShowPackageModal(true)
   }
 
   const sortData = (key) => {
@@ -225,33 +288,40 @@ export function Payments() {
   const handleSubmitPackage = async (e) => {
     e.preventDefault()
     try {
-      const submitData = {
-        studentId: packageForm.studentId,
-        name: packageForm.name,
-        totalHours: parseFloat(packageForm.totalHours),
-        price: parseFloat(packageForm.price),
-        purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
-        ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : {})
+      if (editingPackage) {
+        // When editing, only allow updating date, expiration, and deletion
+        const submitData = {
+          purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
+          ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : { expiresAt: null })
+        }
+        
+        await api.put(`/packages/${editingPackage.id}`, submitData)
+        toast.success('Package updated successfully')
+      } else {
+        // Creating new package
+        const submitData = {
+          studentId: packageForm.studentId,
+          name: packageForm.name,
+          totalHours: parseFloat(packageForm.totalHours),
+          price: parseFloat(packageForm.price),
+          purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
+          ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : {})
+        }
+
+        // Add payment method to submit data
+        submitData.method = packageForm.method
+
+        await api.post('/packages', submitData)
+
+        toast.success('Package created and payment recorded')
       }
 
-      await api.post('/packages', submitData)
-
-      // Also record a payment for the package purchase so it shows in payments list
-      await api.post('/payments', {
-        studentId: packageForm.studentId,
-        amount: parseFloat(packageForm.price),
-        method: packageForm.method,
-        date: new Date(packageForm.purchasedAt).toISOString(),
-        notes: `Package: ${packageForm.name}`
-      })
-
-      toast.success('Package created and payment recorded')
       await fetchPayments()
       await fetchPackages()
       setShowPackageModal(false)
       resetPackageForm()
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to create package')
+      toast.error(error.response?.data?.message || `Failed to ${editingPackage ? 'update' : 'create'} package`)
     }
   }
 
@@ -287,13 +357,6 @@ export function Payments() {
               <p className="text-sm text-gray-500 mt-1">{payments.length} {payments.length === 1 ? 'payment' : 'payments'}</p>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowPackagesList(!showPackagesList)}
-                className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
-                title="View packages"
-              >
-                {showPackagesList ? 'Hide Packages' : 'Packages'}
-              </button>
               <button
                 onClick={() => { resetPackageForm(); setShowPackageModal(true); }}
                 className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
@@ -397,25 +460,6 @@ export function Payments() {
                 <p className="text-sm text-gray-500 mt-1">{packages.length} {packages.length === 1 ? 'package' : 'packages'}</p>
               </div>
               <div className="flex items-center gap-2">
-                {packages.length > 0 && (
-                  <button
-                    onClick={async () => {
-                      if (window.confirm(`Are you sure you want to delete ALL ${packages.length} packages? This action cannot be undone.`)) {
-                        try {
-                          await api.delete('/packages/all')
-                          toast.success(`Deleted all ${packages.length} packages`)
-                          await fetchPackages()
-                        } catch (error) {
-                          toast.error(error.response?.data?.message || 'Failed to delete packages')
-                        }
-                      }
-                    }}
-                    className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
-                    title="Delete all packages"
-                  >
-                    Delete All
-                  </button>
-                )}
                 <button
                   onClick={() => setShowPackagesList(false)}
                   className="p-1.5 rounded-md text-gray-600 hover:bg-gray-50 transition-colors"
@@ -467,18 +511,6 @@ export function Payments() {
                                 {pkg.expiresAt && ` • Expires: ${new Date(pkg.expiresAt).toLocaleDateString()}`}
                               </p>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2 ml-4">
-                            <button
-                              onClick={() => handleTogglePackageActive(pkg)}
-                              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                                pkg.isActive
-                                  ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                  : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                              }`}
-                            >
-                              {pkg.isActive ? 'Deactivate' : 'Activate'}
-                            </button>
                           </div>
                         </div>
                       </div>
@@ -626,9 +658,17 @@ export function Payments() {
                           required
                           value={formData.amount}
                           onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                          className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                          readOnly={editingPayment && (editingPayment.packageId || (editingPayment.notes && editingPayment.notes.startsWith('Package: ')))}
+                          className={`w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm ${
+                            editingPayment && (editingPayment.packageId || (editingPayment.notes && editingPayment.notes.startsWith('Package: '))) 
+                              ? 'bg-gray-50 text-gray-600 cursor-not-allowed' 
+                              : ''
+                          }`}
                           placeholder="0.00"
                         />
+                        {editingPayment && (editingPayment.packageId || (editingPayment.notes && editingPayment.notes.startsWith('Package: '))) && (
+                          <span className="text-xs text-gray-500 ml-2">(Cannot change package payment amount)</span>
+                        )}
                       </div>
                     </div>
 
@@ -673,8 +713,34 @@ export function Payments() {
                           onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                           rows={3}
                           className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm resize-none"
-                          placeholder="Optional notes..."
+                          placeholder="Optional notes... (Use 'Package: Package Name' for package payments)"
                         />
+                        {formData.notes && formData.notes.trim().startsWith('Package: ') && formData.studentId && (() => {
+                          const student = students.find(s => s.id === formData.studentId)
+                          if (!student) return null
+                          
+                          const isValid = student.usePackages && student.pricePerPackage
+                          const amountMatches = student.pricePerPackage && Math.abs(parseFloat(formData.amount || 0) - parseFloat(student.pricePerPackage)) <= 0.01
+                          
+                          return (
+                            <div className="mt-2 space-y-1">
+                              {!student.usePackages && (
+                                <p className="text-xs text-red-600">⚠️ This student does not use packages</p>
+                              )}
+                              {student.usePackages && !student.pricePerPackage && (
+                                <p className="text-xs text-red-600">⚠️ Package price not set for this student</p>
+                              )}
+                              {isValid && !amountMatches && (
+                                <p className="text-xs text-red-600">
+                                  ⚠️ Amount must match package price: ${parseFloat(student.pricePerPackage).toFixed(2)}
+                                </p>
+                              )}
+                              {isValid && amountMatches && (
+                                <p className="text-xs text-green-600">✓ Valid package payment</p>
+                              )}
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -724,7 +790,9 @@ export function Payments() {
               <form onSubmit={handleSubmitPackage}>
                 <div className="bg-white px-6 pt-5 pb-4">
                   <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900">Add Package</h3>
+                    <h3 className="text-lg font-semibold text-gray-900">
+                      {editingPackage ? 'Edit Package' : 'Add Package'}
+                    </h3>
                     <button
                       type="button"
                       onClick={() => { setShowPackageModal(false); resetPackageForm(); }}
@@ -735,89 +803,139 @@ export function Payments() {
                   </div>
 
                   <div className="space-y-4">
-                    {/* Student */}
-                    <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
-                      <div className="flex-1">
-                        <select
-                          required
-                          value={packageForm.studentId}
-                          onChange={(e) => setPackageForm({ ...packageForm, studentId: e.target.value })}
-                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                        >
-                          <option value="">Select student</option>
-                          {students.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.firstName} {s.lastName}
-                            </option>
-                          ))}
-                        </select>
+                    {!editingPackage && (
+                      <>
+                        {/* Student */}
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
+                          <div className="flex-1">
+                            <select
+                              required
+                              value={packageForm.studentId}
+                              onChange={(e) => {
+                                const selectedStudent = students.find(s => s.id === e.target.value)
+                                setPackageForm({ 
+                                  ...packageForm, 
+                                  studentId: e.target.value,
+                                  // Prefill totalHours and price when student is selected
+                                  totalHours: selectedStudent ? 10 : packageForm.totalHours,
+                                  price: selectedStudent?.pricePerPackage || packageForm.price
+                                })
+                              }}
+                              className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                            >
+                              <option value="">Select student</option>
+                              {students.filter(s => !s.archived && s.usePackages).map(s => (
+                                <option key={s.id} value={s.id}>
+                                  {s.firstName} {s.lastName}
+                                  {s.pricePerPackage ? ` ($${parseFloat(s.pricePerPackage).toFixed(2)})` : ''}
+                                </option>
+                              ))}
+                            </select>
+                            {students.filter(s => !s.archived && s.usePackages).length === 0 && (
+                              <p className="text-xs text-gray-500 mt-1">No students with packages enabled</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Package Name */}
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
+                          <input
+                            type="text"
+                            required
+                            value={packageForm.name}
+                            onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
+                            className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                            placeholder="e.g., 10-Hour Package"
+                          />
+                        </div>
+
+                        {/* Total Hours - Read-only, pre-filled */}
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="any"
+                            required
+                            value={packageForm.totalHours}
+                            readOnly
+                            className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
+                            placeholder="10"
+                          />
+                          <span className="text-xs text-gray-500 ml-2 pt-1.5">(Auto-filled from student settings)</span>
+                        </div>
+
+                        {/* Price - Read-only, pre-filled */}
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
+                          <div className="flex-1 flex items-center gap-1">
+                            <span className="text-sm text-gray-600">$</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              required
+                              value={packageForm.price}
+                              readOnly
+                              className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
+                              placeholder="0.00"
+                            />
+                            <span className="text-xs text-gray-500 ml-2">(Auto-filled from student's package price)</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                    
+                    {editingPackage && (
+                      <>
+                        {/* Read-only fields when editing */}
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
+                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
+                            {editingPackage.student.firstName} {editingPackage.student.lastName}
+                          </div>
+                        </div>
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
+                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
+                            {editingPackage.name}
+                          </div>
+                        </div>
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
+                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
+                            {editingPackage.totalHours}
+                          </div>
+                        </div>
+                        <div className="flex items-start py-2">
+                          <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
+                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
+                            ${editingPackage.price.toFixed(2)}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {!editingPackage && (
+                      <div className="flex items-start py-2">
+                        <label className="w-32 text-sm text-gray-600 pt-2">Method</label>
+                        <div className="flex-1">
+                          <select
+                            required
+                            value={packageForm.method}
+                            onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
+                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                          >
+                            <option value="venmo">Venmo</option>
+                            <option value="zelle">Zelle</option>
+                            <option value="cash">Cash</option>
+                            <option value="other">Other</option>
+                          </select>
+                        </div>
                       </div>
-                    </div>
-
-                    {/* Package Name */}
-                    <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
-                      <input
-                        type="text"
-                        required
-                        value={packageForm.name}
-                        onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                        placeholder="e.g., 10-Hour Package"
-                      />
-                    </div>
-
-                    {/* Total Hours */}
-                    <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="any"
-                        required
-                        value={packageForm.totalHours}
-                        onChange={(e) => setPackageForm({ ...packageForm, totalHours: e.target.value })}
-                        className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                        placeholder="10"
-                      />
-                    </div>
-
-                    {/* Price */}
-                    <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
-                      <div className="flex-1 flex items-center gap-1">
-                        <span className="text-sm text-gray-600">$</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          required
-                          value={packageForm.price}
-                          onChange={(e) => setPackageForm({ ...packageForm, price: e.target.value })}
-                          className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Payment Method */}
-                    <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Method</label>
-                      <div className="flex-1">
-                        <select
-                          required
-                          value={packageForm.method}
-                          onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
-                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                        >
-                          <option value="venmo">Venmo</option>
-                          <option value="zelle">Zelle</option>
-                          <option value="cash">Cash</option>
-                          <option value="other">Other</option>
-                        </select>
-                      </div>
-                    </div>
+                    )}
 
                     {/* Purchased At */}
                     <div className="flex items-start py-2">

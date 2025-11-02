@@ -100,7 +100,22 @@ router.get('/', async (req, res) => {
     const lessons = await prisma.lesson.findMany({
       where,
       include: {
-        student: true
+        student: true,
+        payment: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true
+          }
+        },
+        package: {
+          select: {
+            id: true,
+            name: true,
+            purchasedAt: true
+          }
+        }
       },
       orderBy: { dateTime: 'desc' }
     });
@@ -121,7 +136,27 @@ router.get('/:id', async (req, res) => {
         userId: req.user.id
       },
       include: {
-        student: true
+        student: true,
+        payment: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true,
+            notes: true
+          }
+        },
+        package: {
+          select: {
+            id: true,
+            name: true,
+            totalHours: true,
+            hoursUsed: true,
+            price: true,
+            purchasedAt: true,
+            expiresAt: true
+          }
+        }
       }
     });
 
@@ -181,13 +216,11 @@ router.post(
         return res.status(404).json({ message: 'Student not found' });
       }
 
-      // Calculate price based on student's hourly rate and lesson duration
-      // pricePerLesson is now treated as price per hour
-      // price = (hourlyRate * durationInMinutes) / 60
+      // Calculate price based on student's hourly rate
+      // The student's pricePerLesson is already set to package rate if a package was purchased
       const hourlyRate = student.pricePerLesson || 0;
-      const calculatedPrice = (hourlyRate * duration) / 60;
-      // Use calculated price if student has hourly rate, otherwise use provided price
-      const finalPrice = hourlyRate > 0 ? calculatedPrice : (price || 0);
+      const lessonHours = duration / 60; // Convert minutes to hours
+      const finalPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (price || 0);
 
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
@@ -197,15 +230,17 @@ router.post(
         const endDateWithTime = new Date(recurringEndDate);
         const dates = calculateRecurringDates(dateTime, recurringFrequency, endDateWithTime);
         
+        // Initial lesson data with prices - will be updated based on packages
         const lessonsData = dates.map(date => ({
           userId: req.user.id,
           studentId,
           dateTime: date,
           duration,
           subject,
-          price: finalPrice,
+          price: finalPrice, // Will be updated if packages are used
           notes: notes || null,
           status: resolveStatus(date),
+          isPaid: false, // All new lessons are unpaid
           locationType: locationType || 'in-person',
           link: link || null,
           isRecurring: true,
@@ -216,41 +251,50 @@ router.post(
           allDay: allDay || false
         }));
 
+        // Update all lesson prices using student's current hourly rate
+        // (which is set to package rate if a package was purchased)
+        for (let i = 0; i < lessonsData.length; i++) {
+          const lessonHours = lessonsData[i].duration / 60;
+          lessonsData[i].price = hourlyRate > 0 ? (hourlyRate * lessonsData[i].duration) / 60 : finalPrice;
+        }
+
         const lessons = await prisma.lesson.createMany({
           data: lessonsData
         });
 
-        // Deduct packages: consume hours from student's active packages based on lesson durations
+        // Deduct hours from active packages for all recurring lessons
         try {
           // Calculate total hours needed for all lessons
-          let remainingHours = 0;
-          lessonsData.forEach(lesson => {
-            remainingHours += lesson.duration / 60; // Convert minutes to hours
+          const totalHours = lessonsData.reduce((sum, lesson) => sum + (lesson.duration / 60), 0);
+          let remainingHours = totalHours;
+          
+          // Get all active packages ordered by purchase date
+          const activePackages = await prisma.package.findMany({
+            where: {
+              userId: req.user.id,
+              studentId,
+              isActive: true,
+              OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+            },
+            orderBy: { purchasedAt: 'asc' }
           });
           
-          if (remainingHours > 0) {
-            // Get student's active packages ordered by purchasedAt
-            const pkgs = await prisma.package.findMany({
-              where: {
-                userId: req.user.id,
-                studentId,
-                isActive: true,
-                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
-              },
-              orderBy: { purchasedAt: 'asc' }
+          // Deduct hours from packages in order
+          for (const pkg of activePackages) {
+            if (remainingHours <= 0) break;
+            
+            const availableHours = pkg.totalHours - pkg.hoursUsed;
+            if (availableHours <= 0) continue;
+            
+            const hoursToDeduct = Math.min(remainingHours, availableHours);
+            
+            await prisma.package.update({
+              where: { id: pkg.id },
+              data: { hoursUsed: { increment: hoursToDeduct } }
             });
             
-            for (const pkg of pkgs) {
-              const available = (pkg.totalHours || 0) - (pkg.hoursUsed || 0);
-              if (available <= 0) continue;
-              const consume = Math.min(available, remainingHours);
-              await prisma.package.update({
-                where: { id: pkg.id },
-                data: { hoursUsed: { increment: consume } }
-              });
-              remainingHours -= consume;
-              if (remainingHours <= 0) break;
-            }
+            remainingHours -= hoursToDeduct;
+            console.log(`Deducted ${hoursToDeduct.toFixed(2)} hours from package ${pkg.id} for ${lessons.count} recurring lessons`);
           }
         } catch (e) {
           console.error('Package deduction error (recurring):', e);
@@ -272,6 +316,7 @@ router.post(
           price: finalPrice,
           notes: notes || null,
           status: resolveStatus(dateTime),
+          isPaid: false, // All new lessons are unpaid
           locationType: locationType || 'in-person',
           link: link || null,
           isRecurring: false,
@@ -289,9 +334,13 @@ router.post(
           }
         });
 
-        // Deduct from student's active package based on lesson duration (in hours)
+        // Deduct hours from active packages when lesson is scheduled
         try {
-          const pkg = await prisma.package.findFirst({
+          const lessonHours = duration / 60; // Convert minutes to hours
+          let remainingHours = lessonHours;
+          
+          // Get all active packages ordered by purchase date
+          const activePackages = await prisma.package.findMany({
             where: {
               userId: req.user.id,
               studentId,
@@ -301,15 +350,22 @@ router.post(
             orderBy: { purchasedAt: 'asc' }
           });
           
-          if (pkg && pkg.totalHours > pkg.hoursUsed) {
-            const lessonHours = duration / 60; // Convert minutes to hours
+          // Deduct hours from packages in order
+          for (const pkg of activePackages) {
+            if (remainingHours <= 0) break;
+            
             const availableHours = pkg.totalHours - pkg.hoursUsed;
-            const hoursToDeduct = Math.min(lessonHours, availableHours);
+            if (availableHours <= 0) continue;
+            
+            const hoursToDeduct = Math.min(remainingHours, availableHours);
             
             await prisma.package.update({
               where: { id: pkg.id },
               data: { hoursUsed: { increment: hoursToDeduct } }
             });
+            
+            remainingHours -= hoursToDeduct;
+            console.log(`Deducted ${hoursToDeduct.toFixed(2)} hours from package ${pkg.id} for lesson ${lesson.id}`);
           }
         } catch (e) {
           console.error('Package deduction error:', e);
@@ -361,11 +417,12 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'dateTime is required' });
     }
 
-    // Calculate price based on student's hourly rate and lesson duration
-    // pricePerLesson is treated as price per hour
+    // Calculate price based on student's hourly rate
+    // The student's pricePerLesson is already set to package rate if a package was purchased
     const finalDuration = duration ? parseInt(duration) : currentLesson.duration;
     const hourlyRate = student.pricePerLesson || 0;
-    let calculatedPrice = hourlyRate > 0 ? (hourlyRate * finalDuration) / 60 : (price !== undefined ? parseFloat(price) : currentLesson.price);
+    const lessonHours = finalDuration / 60; // Convert minutes to hours
+    const calculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (price !== undefined ? parseFloat(price) : currentLesson.price);
 
     const updateData = {
       studentId: finalStudentId,
@@ -465,6 +522,7 @@ router.put('/:id', async (req, res) => {
           price: updateData.price || currentLesson.price,
           notes: updateData.notes || currentLesson.notes,
           status: updateData.status || currentLesson.status || 'scheduled',
+          isPaid: false, // New lessons are unpaid
           locationType: updateData.locationType || currentLesson.locationType || 'in-person',
           link: updateData.link || currentLesson.link,
           isRecurring: true,
@@ -556,9 +614,19 @@ router.put('/:id/recurring-future', async (req, res) => {
       allDay
     } = req.body;
 
+    // Get the student for price calculations
+    const finalStudentId = studentId || lesson.studentId;
+    const student = await prisma.student.findFirst({
+      where: { id: finalStudentId, userId: req.user.id }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
     // Prepare updateData first (needed for series recreation check)
     const updateData = {
-      studentId: studentId || lesson.studentId,
+      studentId: finalStudentId,
       dateTime: dateTime ? new Date(dateTime) : lesson.dateTime,
       duration: duration ? parseInt(duration) : lesson.duration,
       subject: subject !== undefined ? subject : lesson.subject,
@@ -630,6 +698,7 @@ router.put('/:id/recurring-future', async (req, res) => {
             price: updateData.price !== undefined ? updateData.price : lesson.price,
             notes: updateData.notes !== undefined ? (updateData.notes || null) : lesson.notes,
             status: updateData.status || lesson.status || 'scheduled',
+            isPaid: false, // New lessons are unpaid
             locationType: updateData.locationType || lesson.locationType || 'in-person',
             link: updateData.link !== undefined ? (updateData.link || null) : lesson.link,
             isRecurring: true,
@@ -869,12 +938,17 @@ router.put('/:id/recurring-future', async (req, res) => {
         });
 
         // Update each lesson's time by adding the time difference
-        // Also recalculate price based on each lesson's duration
+        // Recalculate price using student's current hourly rate
+        // (which is set to package rate if a package was purchased)
+        const hourlyRate = student.pricePerLesson || 0;
+
         for (const lessonInSeries of allLessonsInSeries) {
           const newDateTime = new Date(lessonInSeries.dateTime.getTime() + timeDifference);
           const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
-          const hourlyRate = student.pricePerLesson || 0;
-          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          const lessonHours = lessonDuration / 60;
+          
+          // Calculate price using student's current hourly rate
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
           
           await prisma.lesson.update({
             where: { id: lessonInSeries.id },
@@ -900,11 +974,16 @@ router.put('/:id/recurring-future', async (req, res) => {
           }
         });
 
-        // Update each lesson individually to recalculate price based on its duration
+        // Update each lesson individually to recalculate price using student's current hourly rate
+        // (which is set to package rate if a package was purchased)
+        const hourlyRate = student.pricePerLesson || 0;
+
         for (const lessonInSeries of allLessonsInSeries) {
           const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
-          const hourlyRate = student.pricePerLesson || 0;
-          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          const lessonHours = lessonDuration / 60;
+          
+          // Calculate price using student's current hourly rate
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
           
           await prisma.lesson.update({
             where: { id: lessonInSeries.id },
@@ -956,6 +1035,7 @@ router.put('/:id/recurring-future', async (req, res) => {
               price: updateData.price,
               notes: updateData.notes,
               status: updateData.status,
+              isPaid: false, // New lessons are unpaid
               locationType: updateData.locationType,
               link: updateData.link,
               isRecurring: true,
@@ -1021,13 +1101,18 @@ router.put('/:id/recurring-future', async (req, res) => {
         console.log('[recurring-future] Found', allLessonsInSeries.length, 'lessons to update with new time');
 
         // Update each lesson's time by adding the time difference
-        // Also recalculate price based on each lesson's duration
+        // Recalculate price using student's current hourly rate
+        // (which is set to package rate if a package was purchased)
+        const hourlyRate = student.pricePerLesson || 0;
+
         for (const lessonInSeries of allLessonsInSeries) {
           const newDateTime = new Date(lessonInSeries.dateTime.getTime() + timeDifference);
           console.log('[recurring-future] Updating lesson', lessonInSeries.id, 'from', lessonInSeries.dateTime.toISOString(), 'to', newDateTime.toISOString());
           const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
-          const hourlyRate = student.pricePerLesson || 0;
-          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          const lessonHours = lessonDuration / 60;
+          
+          // Calculate price using student's current hourly rate
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
           
           await prisma.lesson.update({
             where: { id: lessonInSeries.id },
@@ -1057,11 +1142,16 @@ router.put('/:id/recurring-future', async (req, res) => {
           }
         });
 
-        // Update each lesson individually to recalculate price based on its duration
+        // Update each lesson individually to recalculate price using student's current hourly rate
+        // (which is set to package rate if a package was purchased)
+        const hourlyRate = student.pricePerLesson || 0;
+
         for (const lessonInSeries of allLessonsInSeries) {
           const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
-          const hourlyRate = student.pricePerLesson || 0;
-          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          const lessonHours = lessonDuration / 60;
+          
+          // Calculate price using student's current hourly rate
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
           
           await prisma.lesson.update({
             where: { id: lessonInSeries.id },
@@ -1131,11 +1221,236 @@ router.delete('/:id', async (req, res) => {
       where: { 
         id: req.params.id,
         userId: req.user.id
+      },
+      include: {
+        student: true
       }
     });
 
     if (!lesson) {
       return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // If lesson was paid or partially paid, redistribute the payment
+    const paidAmount = lesson.paidAmount || 0;
+    const wasPaidWithPackage = lesson.packageId !== null;
+    let creditedHours = 0;
+    let packageToReuse = null;
+    
+    if (paidAmount > 0 || wasPaidWithPackage) {
+      // If lesson was paid with a package, credit the package back
+      if (wasPaidWithPackage) {
+        const pkg = await prisma.package.findFirst({
+          where: { id: lesson.packageId, userId: req.user.id }
+        });
+        
+        if (pkg) {
+          // Calculate hours to credit back (lesson duration in hours)
+          const lessonHours = (lesson.duration || 0) / 60;
+          creditedHours = lessonHours;
+          
+          // Credit hours back to package (but don't exceed original totalHours)
+          const newHoursUsed = Math.max(0, (pkg.hoursUsed || 0) - lessonHours);
+          
+          await prisma.package.update({
+            where: { id: pkg.id },
+            data: { hoursUsed: newHoursUsed }
+          });
+          
+          packageToReuse = pkg;
+          console.log(`[Lesson Delete] Credited ${lessonHours} hours back to package ${pkg.id}. New hoursUsed: ${newHoursUsed}/${pkg.totalHours}`);
+        }
+      }
+      
+      // If lesson was paid with a package, use the credited package hours to pay oldest unpaid lesson
+      if (wasPaidWithPackage && packageToReuse && creditedHours > 0) {
+        // Get the oldest unpaid lesson for this student
+        const oldestUnpaidLesson = await prisma.lesson.findFirst({
+          where: {
+            userId: req.user.id,
+            studentId: lesson.studentId,
+            isPaid: false,
+            id: { not: lesson.id }, // Exclude the lesson being deleted
+            NOT: { status: { in: ['cancelled', 'canceled'] } }
+          },
+          orderBy: { dateTime: 'asc' }
+        });
+
+        if (oldestUnpaidLesson) {
+          // Calculate the package hourly rate
+          const packageHourlyRate = packageToReuse.price / packageToReuse.totalHours;
+          // Calculate lesson price based on package rate
+          const lessonHoursForPayment = oldestUnpaidLesson.duration / 60;
+          const lessonPrice = oldestUnpaidLesson.price || (packageHourlyRate * lessonHoursForPayment);
+          const currentPaidAmount = oldestUnpaidLesson.paidAmount || 0;
+          const remainingNeeded = lessonPrice - currentPaidAmount;
+          
+          // Check if we have enough credited hours to pay this lesson
+          if (creditedHours > 0 && remainingNeeded > 0) {
+            // Calculate how much we can pay with the credited hours
+            const amountFromCreditedHours = packageHourlyRate * Math.min(creditedHours, lessonHoursForPayment);
+            
+            if (amountFromCreditedHours >= remainingNeeded) {
+              // Fully pay this lesson using credited package hours
+              const hoursToUse = lessonHoursForPayment; // Use full lesson hours
+              const newHoursUsed = Math.min(packageToReuse.totalHours, (packageToReuse.hoursUsed || 0) + hoursToUse);
+              
+              await prisma.lesson.update({
+                where: { id: oldestUnpaidLesson.id },
+                data: { 
+                  isPaid: true,
+                  paidAmount: lessonPrice,
+                  packageId: packageToReuse.id // Link to package
+                }
+              });
+              
+              // Update package hours used
+              await prisma.package.update({
+                where: { id: packageToReuse.id },
+                data: { hoursUsed: newHoursUsed }
+              });
+              
+              console.log(`[Lesson Delete] Applied ${hoursToUse} hours from credited package to lesson ${oldestUnpaidLesson.id}. Package hoursUsed: ${newHoursUsed}/${packageToReuse.totalHours}`);
+              
+              // Remaining credited hours and paid amount go to credit
+              creditedHours -= hoursToUse;
+              if (creditedHours > 0 || paidAmount > 0) {
+                const creditToAdd = (packageHourlyRate * creditedHours) + paidAmount;
+                if (creditToAdd > 0) {
+                  await prisma.student.update({
+                    where: { id: lesson.studentId },
+                    data: { credit: { increment: creditToAdd } }
+                  });
+                }
+              }
+            } else {
+              // Partially pay this lesson using available credited hours
+              const hoursToUse = Math.min(creditedHours, lessonHoursForPayment);
+              const amountToApply = packageHourlyRate * hoursToUse;
+              const newPaidAmount = currentPaidAmount + amountToApply;
+              const newHoursUsed = Math.min(packageToReuse.totalHours, (packageToReuse.hoursUsed || 0) + hoursToUse);
+              
+              await prisma.lesson.update({
+                where: { id: oldestUnpaidLesson.id },
+                data: { 
+                  isPaid: false,
+                  paidAmount: newPaidAmount,
+                  packageId: packageToReuse.id // Link to package
+                }
+              });
+              
+              // Update package hours used
+              await prisma.package.update({
+                where: { id: packageToReuse.id },
+                data: { hoursUsed: newHoursUsed }
+              });
+              
+              console.log(`[Lesson Delete] Applied ${hoursToUse} hours from credited package to partially pay lesson ${oldestUnpaidLesson.id}`);
+              
+              // Remaining credited hours and paid amount go to credit
+              creditedHours -= hoursToUse;
+              const creditToAdd = (packageHourlyRate * creditedHours) + paidAmount;
+              if (creditToAdd > 0) {
+                await prisma.student.update({
+                  where: { id: lesson.studentId },
+                  data: { credit: { increment: creditToAdd } }
+                });
+              }
+            }
+          } else {
+            // Not enough credited hours or lesson already fully paid, add paidAmount to credit
+            if (paidAmount > 0) {
+              await prisma.student.update({
+                where: { id: lesson.studentId },
+                data: { credit: { increment: paidAmount } }
+              });
+            }
+          }
+        } else {
+          // No unpaid lesson - add paidAmount to credit
+          await prisma.student.update({
+            where: { id: lesson.studentId },
+            data: { credit: { increment: paidAmount } }
+          });
+        }
+      } else if (!wasPaidWithPackage && paidAmount > 0) {
+        // Regular payment (not from package) - redistribute to oldest unpaid lesson
+        const oldestUnpaidLesson = await prisma.lesson.findFirst({
+          where: {
+            userId: req.user.id,
+            studentId: lesson.studentId,
+            isPaid: false,
+            id: { not: lesson.id },
+            NOT: { status: { in: ['cancelled', 'canceled'] } }
+          },
+          orderBy: { dateTime: 'asc' }
+        });
+
+        if (oldestUnpaidLesson) {
+          const lessonPrice = oldestUnpaidLesson.price || 0;
+          const currentPaidAmount = oldestUnpaidLesson.paidAmount || 0;
+          const remainingNeeded = lessonPrice - currentPaidAmount;
+          
+          if (remainingNeeded > 0) {
+            if (paidAmount >= remainingNeeded) {
+              await prisma.lesson.update({
+                where: { id: oldestUnpaidLesson.id },
+                data: { 
+                  isPaid: true,
+                  paidAmount: lessonPrice,
+                  paymentId: lesson.paymentId // Link to same payment
+                }
+              });
+              
+              const remainingPayment = paidAmount - remainingNeeded;
+              if (remainingPayment > 0) {
+                await prisma.student.update({
+                  where: { id: lesson.studentId },
+                  data: { credit: { increment: remainingPayment } }
+                });
+              }
+            } else {
+              const newPaidAmount = currentPaidAmount + paidAmount;
+              await prisma.lesson.update({
+                where: { id: oldestUnpaidLesson.id },
+                data: { 
+                  isPaid: false,
+                  paidAmount: newPaidAmount,
+                  paymentId: lesson.paymentId // Link to same payment
+                }
+              });
+            }
+          } else {
+            await prisma.student.update({
+              where: { id: lesson.studentId },
+              data: { credit: { increment: paidAmount } }
+            });
+          }
+        } else {
+          await prisma.student.update({
+            where: { id: lesson.studentId },
+            data: { credit: { increment: paidAmount } }
+          });
+        }
+      }
+    } else if (wasPaidWithPackage) {
+      // Lesson had no paid amount but was linked to package (edge case)
+      // Still credit hours back to package
+      const pkg = await prisma.package.findFirst({
+        where: { id: lesson.packageId, userId: req.user.id }
+      });
+      
+      if (pkg) {
+        const lessonHours = (lesson.duration || 0) / 60;
+        const newHoursUsed = Math.max(0, (pkg.hoursUsed || 0) - lessonHours);
+        
+        await prisma.package.update({
+          where: { id: pkg.id },
+          data: { hoursUsed: newHoursUsed }
+        });
+        
+        console.log(`[Lesson Delete] Credited ${lessonHours} hours back to package ${pkg.id} (no payment amount). New hoursUsed: ${newHoursUsed}/${pkg.totalHours}`);
+      }
     }
 
     await prisma.lesson.delete({

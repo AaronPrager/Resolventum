@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Lesson" ADD COLUMN "paidAmount" DOUBLE PRECISION NOT NULL DEFAULT 0;
+

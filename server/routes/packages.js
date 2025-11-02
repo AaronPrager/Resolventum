@@ -77,73 +77,218 @@ router.post(
         return res.status(404).json({ message: 'Student not found' });
       }
 
+      // Log request details for debugging
+      console.log(`[Package Creation] Request received:`);
+      console.log(`  Student: ${student.firstName} ${student.lastName} (${req.body.studentId})`);
+      console.log(`  Package name: ${req.body.name}`);
+      console.log(`  Package price from request: $${req.body.price}`);
+      console.log(`  Total hours: ${req.body.totalHours}`);
+      console.log(`  Student credit BEFORE package: $${student.credit || 0}`);
+
+      // First create the payment for the package
+      const payment = await prisma.payment.create({
+        data: {
+          userId: req.user.id,
+          studentId: req.body.studentId,
+          amount: req.body.price,
+          method: req.body.method || 'other',
+          date: new Date(req.body.purchasedAt),
+          notes: `Package: ${req.body.name}`
+        }
+      });
+
+      console.log(`[Package Creation] Payment created: ${payment.id} for $${payment.amount}`);
+
+      // Then create the package linked to the payment
+      // Extract only fields that belong to Package model (exclude method which is for Payment)
+      const { method, ...packageData } = req.body;
+      
       const pkg = await prisma.package.create({
         data: {
-          ...req.body,
+          ...packageData,
           userId: req.user.id,
+          paymentId: payment.id, // Link package to payment
           isActive: req.body.isActive !== undefined ? req.body.isActive : true // Default to active
         },
         include: {
-          student: true
+          student: true,
+          payment: true
         }
       });
 
-      // After creating the package, apply it to past unpaid lessons
-      // Find all past lessons for this student that are not cancelled
-      const now = new Date();
-      const pastLessons = await prisma.lesson.findMany({
+      // Update payment to link to package (bidirectional link)
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { packageId: pkg.id }
+      });
+
+      console.log(`[Package Creation] Package created:`);
+      console.log(`  Package ID: ${pkg.id}`);
+      console.log(`  Package price stored: $${pkg.price}`);
+      console.log(`  Price matches request: ${pkg.price === parseFloat(req.body.price)}`);
+
+      // Simplified logic: When package is purchased, update student's hourly rate to package rate
+      // and recalculate all unpaid past lessons
+      const packageHourlyRate = pkg.price / pkg.totalHours;
+      
+      // Update student's pricePerLesson to package rate and set usePackages to true
+      await prisma.student.update({
+        where: { id: student.id },
+        data: { 
+          pricePerLesson: packageHourlyRate,
+          usePackages: true // Automatically enable packages when a package is purchased
+        }
+      });
+      
+      console.log(`Updated student ${student.firstName} ${student.lastName} hourly rate from $${student.pricePerLesson || 0} to $${packageHourlyRate}, usePackages set to true`);
+      
+      // Get student's current credit
+      const updatedStudent = await prisma.student.findFirst({
+        where: { id: student.id, userId: req.user.id }
+      });
+      
+      console.log(`[Package Creation] Student credit check:`);
+      console.log(`  Credit after student update: $${updatedStudent.credit || 0}`);
+      
+      // Apply package payment to lessons chronologically (same logic as regular payments)
+      // Combine package price and existing credit
+      let availableAmount = pkg.price + (updatedStudent.credit || 0);
+      let creditUsed = updatedStudent.credit || 0;
+      
+      console.log(`[Package Creation] Payment calculation:`);
+      console.log(`  pkg.price: $${pkg.price}`);
+      console.log(`  updatedStudent.credit: $${updatedStudent.credit || 0}`);
+      console.log(`  availableAmount (pkg.price + credit): $${availableAmount}`);
+      console.log(`  creditUsed: $${creditUsed}`);
+      
+      // Get all unpaid lessons for this student, ordered by date (oldest first)
+      // We'll check for partial payments in the loop
+      const unpaidLessons = await prisma.lesson.findMany({
         where: {
           userId: req.user.id,
           studentId: req.body.studentId,
-          dateTime: { lt: now }, // Lessons in the past
-          NOT: { status: { in: ['cancelled', 'canceled'] } } // Not cancelled
+          isPaid: false,  // Get lessons that aren't fully paid
+          NOT: { status: { in: ['cancelled', 'canceled'] } }
         },
-        orderBy: { dateTime: 'asc' } // Process oldest first
+        orderBy: { dateTime: 'asc' }
       });
 
-      // Calculate package hourly rate
-      const packageHourlyRate = pkg.price / pkg.totalHours;
-      const studentHourlyRate = student.pricePerLesson || 0;
-      let remainingPackageHours = pkg.totalHours - pkg.hoursUsed;
-      let hoursDeducted = 0;
+      console.log(`Found ${unpaidLessons.length} unpaid lessons for student ${req.body.studentId}`);
+      console.log(`Package price: $${pkg.price}, Student credit before: $${updatedStudent.credit || 0}, Available: $${pkg.price + (updatedStudent.credit || 0)}`);
 
-      // Process each past lesson and deduct from package if there are remaining hours
-      for (const lesson of pastLessons) {
-        if (remainingPackageHours <= 0) break;
-
-        const lessonHours = lesson.duration / 60; // Convert minutes to hours
-        const hoursToDeduct = Math.min(lessonHours, remainingPackageHours);
+      const lessonsMarkedPaid = [];
+      const lessonsPartiallyPaid = [];
+      let creditToSet = 0;
+      
+      // Apply available amount to lessons chronologically, covering older unpaid/partial first
+      for (const lesson of unpaidLessons) {
+        if (availableAmount <= 0) {
+          // Out of money, but continue to update prices for remaining lessons
+          const lessonHours = lesson.duration / 60;
+          const newLessonPrice = packageHourlyRate * lessonHours;
+          const roundedNewPrice = Math.round(newLessonPrice * 100) / 100;
+          
+          if (lesson.price !== roundedNewPrice) {
+            await prisma.lesson.update({
+              where: { id: lesson.id },
+              data: { price: roundedNewPrice }
+            });
+          }
+          continue;
+        }
         
-        if (hoursToDeduct > 0) {
-          // Update lesson price to use package rate for the portion covered by package
-          const coveredPrice = (packageHourlyRate * (hoursToDeduct * 60)) / 60;
-          const remainingHoursInLesson = lessonHours - hoursToDeduct;
-          const remainingPrice = studentHourlyRate > 0 
-            ? (studentHourlyRate * (remainingHoursInLesson * 60)) / 60 
-            : Math.max(0, lesson.price - coveredPrice);
-          const newPrice = coveredPrice + remainingPrice;
-
-          // Update lesson with package-based price
+        // Recalculate lesson price using the new package rate
+        const lessonHours = lesson.duration / 60; // Convert minutes to hours
+        const newLessonPrice = packageHourlyRate * lessonHours;
+        const roundedNewPrice = Math.round(newLessonPrice * 100) / 100;
+        
+        const lessonPrice = roundedNewPrice;
+        const currentPaidAmount = lesson.paidAmount || 0;
+        const remainingNeeded = lessonPrice - currentPaidAmount;
+        
+        // Update lesson price (always update to package rate for unpaid lessons)
+        if (lesson.price !== roundedNewPrice) {
           await prisma.lesson.update({
             where: { id: lesson.id },
-            data: { price: newPrice }
+            data: { price: roundedNewPrice }
           });
-
-          hoursDeducted += hoursToDeduct;
-          remainingPackageHours -= hoursToDeduct;
+        }
+        
+        if (remainingNeeded <= 0) {
+          // Lesson is already fully paid, skip it
+          continue;
+        }
+        
+        // Apply payment
+        if (availableAmount >= remainingNeeded) {
+          // Full payment for this lesson - mark as paid and link to package and payment
+          const lessonHours = lesson.duration / 60; // Convert minutes to hours
+          await prisma.lesson.update({
+            where: { id: lesson.id },
+            data: { 
+              isPaid: true,
+              paidAmount: lessonPrice,
+              packageId: pkg.id, // Link lesson to package
+              paymentId: pkg.paymentId // Link lesson to the package payment
+            }
+          });
+          
+          // Increment package hours used
+          await prisma.package.update({
+            where: { id: pkg.id },
+            data: { hoursUsed: { increment: lessonHours } }
+          });
+          
+          lessonsMarkedPaid.push({ lessonId: lesson.id, amount: remainingNeeded, totalAmount: lessonPrice });
+          availableAmount -= remainingNeeded;
+        } else {
+          // Partial payment - mark as partially paid and link to package and payment
+          const lessonHours = lesson.duration / 60; // Convert minutes to hours
+          const newPaidAmount = currentPaidAmount + availableAmount;
+          await prisma.lesson.update({
+            where: { id: lesson.id },
+            data: { 
+              isPaid: false,
+              paidAmount: newPaidAmount,
+              packageId: pkg.id, // Link lesson to package (even if partially paid)
+              paymentId: pkg.paymentId // Link lesson to the package payment
+            }
+          });
+          
+          // Increment package hours used (even for partial payments)
+          await prisma.package.update({
+            where: { id: pkg.id },
+            data: { hoursUsed: { increment: lessonHours } }
+          });
+          
+          lessonsPartiallyPaid.push({ lessonId: lesson.id, amount: availableAmount, paidAmount: newPaidAmount, remaining: lessonPrice - newPaidAmount });
+          availableAmount = 0;
+          // Continue to update prices for remaining lessons even if we're out of money
         }
       }
-
-      // Update package with the hours used
-      if (hoursDeducted > 0) {
-        await prisma.package.update({
-          where: { id: pkg.id },
-          data: { hoursUsed: { increment: hoursDeducted } }
-        });
-        console.log(`Applied ${hoursDeducted.toFixed(2)} hours from new package to ${pastLessons.length} past lessons`);
+      
+      // Any remaining amount goes to credit
+      if (availableAmount > 0) {
+        creditToSet = availableAmount;
       }
 
-      // Return updated package
+      // Update student credit to the final remaining amount
+      await prisma.student.update({
+        where: { id: req.body.studentId },
+        data: { credit: creditToSet }
+      });
+      
+      console.log(`Applied package payment:`);
+      console.log(`  Package price: $${pkg.price.toFixed(2)}`);
+      console.log(`  Existing credit: $${creditUsed.toFixed(2)}`);
+      console.log(`  Lessons fully paid: ${lessonsMarkedPaid.length}`);
+      console.log(`  Lessons partially paid: ${lessonsPartiallyPaid.length}`);
+      console.log(`  Final credit balance: $${creditToSet.toFixed(2)}`);
+      if (unpaidLessons.length === 0) {
+        console.log(`  Note: No unpaid lessons found - all payment went to credit`);
+      }
+
+      // Return updated package and student
       const updatedPkg = await prisma.package.findUnique({
         where: { id: pkg.id },
         include: {
@@ -153,9 +298,15 @@ router.post(
 
       res.status(201).json({
         ...updatedPkg,
-        appliedToPastLessons: hoursDeducted > 0,
-        hoursApplied: hoursDeducted,
-        pastLessonsCount: pastLessons.length
+        updatedStudentRate: true,
+        newHourlyRate: packageHourlyRate,
+        applicationResult: {
+          lessonsMarkedPaid: lessonsMarkedPaid.length,
+          lessonsPartiallyPaid: lessonsPartiallyPaid.length,
+          creditRemaining: creditToSet,
+          creditUsed: creditUsed,
+          currentCredit: creditToSet
+        }
       });
     } catch (error) {
       console.error('Create package error:', error);
@@ -165,6 +316,7 @@ router.post(
 );
 
 // Update package
+// Only allow updating purchasedAt and expiresAt (date and expiration)
 router.put('/:id', async (req, res) => {
   try {
     // Verify package belongs to user
@@ -176,19 +328,25 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Package not found' });
     }
 
-    // If studentId is being changed, verify new student belongs to user
-    if (req.body.studentId && req.body.studentId !== existing.studentId) {
-      const student = await prisma.student.findFirst({
-        where: { id: req.body.studentId, userId: req.user.id }
+    // Only allow updating purchasedAt and expiresAt
+    const updateData = {};
+    if (req.body.purchasedAt) {
+      updateData.purchasedAt = new Date(req.body.purchasedAt);
+    }
+    if (req.body.expiresAt !== undefined) {
+      updateData.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
+    }
+
+    // Prevent updating studentId, name, totalHours, price
+    if (req.body.studentId || req.body.name || req.body.totalHours !== undefined || req.body.price !== undefined) {
+      return res.status(400).json({ 
+        message: 'Cannot update student, name, total hours, or price. Only date and expiration can be updated.' 
       });
-      if (!student) {
-        return res.status(404).json({ message: 'Student not found' });
-      }
     }
 
     const pkg = await prisma.package.update({
       where: { id: req.params.id },
-      data: req.body,
+      data: updateData,
       include: {
         student: true
       }
@@ -227,6 +385,80 @@ router.post('/:id/complete', async (req, res) => {
   }
 });
 
+// Delete all packages (must come before /:id route)
+router.delete('/all', async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Count packages before deletion
+    const count = await prisma.package.count({
+      where: { userId }
+    });
+
+    // Delete all packages for this user
+    await prisma.package.deleteMany({
+      where: { userId }
+    });
+
+    res.json({
+      message: `Deleted ${count} packages`,
+      deletedCount: count
+    });
+  } catch (error) {
+    console.error('Delete all packages error:', error);
+    res.status(500).json({ message: 'Error deleting packages' });
+  }
+});
+
+// Delete a single package (must come after /all route)
+router.delete('/:id', async (req, res) => {
+  try {
+    // Verify package belongs to user
+    const existing = await prisma.package.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      include: {
+        lessons: true // Get all lessons linked to this package
+      }
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Package not found' });
+    }
+
+    // Credit back all lessons that were paid with this package
+    const linkedLessons = existing.lessons || [];
+    
+    if (linkedLessons.length > 0) {
+      console.log(`[Package Delete] Crediting back ${linkedLessons.length} lessons linked to package ${existing.id}`);
+      
+      // Unlink and credit back all lessons
+      for (const lesson of linkedLessons) {
+        await prisma.lesson.update({
+          where: { id: lesson.id },
+          data: {
+            packageId: null, // Unlink from package
+            isPaid: false,   // Mark as unpaid
+            paidAmount: 0    // Reset paid amount
+          }
+        });
+        console.log(`[Package Delete] Credited back lesson ${lesson.id}: unmarked as paid, removed package link`);
+      }
+    }
+
+    await prisma.package.delete({
+      where: { id: req.params.id }
+    });
+
+    res.json({ 
+      message: 'Package deleted successfully',
+      lessonsCreditedBack: linkedLessons.length
+    });
+  } catch (error) {
+    console.error('Delete package error:', error);
+    res.status(500).json({ message: 'Error deleting package' });
+  }
+});
+
 // Get package usage report
 router.get('/:id/usage', async (req, res) => {
   try {
@@ -256,16 +488,12 @@ router.get('/:id/usage', async (req, res) => {
     const packageHourlyRate = pkg.price / pkg.totalHours;
     const studentHourlyRate = pkg.student.pricePerLesson || 0;
 
-    // Find lessons that likely used this package
-    // Lessons created/updated after package purchase that have prices matching package rate
-    const lessonsAfterPurchase = await prisma.lesson.findMany({
+    // Get lessons directly linked to this package
+    const linkedLessons = await prisma.lesson.findMany({
       where: {
         userId,
         studentId: pkg.studentId,
-        dateTime: {
-          gte: pkg.purchasedAt // Lessons on or after package purchase
-        },
-        NOT: { status: { in: ['cancelled', 'canceled'] } }
+        packageId: packageId // Directly linked lessons
       },
       orderBy: { dateTime: 'asc' },
       select: {
@@ -275,47 +503,34 @@ router.get('/:id/usage', async (req, res) => {
         subject: true,
         price: true,
         status: true,
+        isPaid: true,
+        paidAmount: true,
         createdAt: true,
         updatedAt: true
       }
     });
 
-    // Calculate which lessons likely used package hours
-    // A lesson likely used the package if:
-    // 1. Its price matches the package rate (or close to it)
-    // 2. It was created/updated after the package was purchased
-    const packageUsage = [];
-    let totalHoursTracked = 0;
-
-    for (const lesson of lessonsAfterPurchase) {
+    // Format lessons for response
+    const packageUsage = linkedLessons.map(lesson => {
       const lessonHours = lesson.duration / 60;
       const lessonPricePerHour = lesson.price / lessonHours;
       
-      // Check if lesson price matches package rate (within 5% tolerance)
-      const priceDifference = Math.abs(lessonPricePerHour - packageHourlyRate);
-      const tolerance = packageHourlyRate * 0.05; // 5% tolerance
-      
-      const likelyUsedPackage = lessonPricePerHour <= packageHourlyRate + tolerance && 
-                                lessonPricePerHour >= packageHourlyRate - tolerance;
-      
-      // Also consider if lesson was updated after package purchase (might have been retroactively applied)
-      const wasUpdatedAfterPackage = lesson.updatedAt >= pkg.purchasedAt;
-      
-      if (likelyUsedPackage || (wasUpdatedAfterPackage && lessonPricePerHour <= packageHourlyRate + tolerance)) {
-        packageUsage.push({
-          lessonId: lesson.id,
-          date: lesson.dateTime,
-          subject: lesson.subject,
-          duration: lesson.duration,
-          hours: lessonHours,
-          price: lesson.price,
-          pricePerHour: lessonPricePerHour,
-          status: lesson.status,
-          likelyUsedPackage: true
-        });
-        totalHoursTracked += lessonHours;
-      }
-    }
+      return {
+        lessonId: lesson.id,
+        date: lesson.dateTime,
+        subject: lesson.subject,
+        duration: lesson.duration,
+        hours: lessonHours,
+        price: lesson.price,
+        pricePerHour: lessonPricePerHour,
+        status: lesson.status,
+        isPaid: lesson.isPaid,
+        paidAmount: lesson.paidAmount,
+        likelyUsedPackage: true // These are confirmed linked to package
+      };
+    });
+
+    const totalHoursTracked = packageUsage.reduce((sum, lesson) => sum + lesson.hours, 0);
 
     // Calculate statistics
     const hoursRemaining = pkg.totalHours - pkg.hoursUsed;
@@ -454,30 +669,7 @@ router.post('/cleanup-orphaned', async (req, res) => {
   }
 });
 
-// Delete all packages
-router.delete('/all', async (req, res) => {
-  try {
-    const userId = req.user.id;
-
-    // Count packages before deletion
-    const count = await prisma.package.count({
-      where: { userId }
-    });
-
-    // Delete all packages for this user
-    await prisma.package.deleteMany({
-      where: { userId }
-    });
-
-    res.json({
-      message: `Deleted ${count} packages`,
-      deletedCount: count
-    });
-  } catch (error) {
-    console.error('Delete all packages error:', error);
-    res.status(500).json({ message: 'Error deleting packages' });
-  }
-});
-
 export default router;
+
+
 

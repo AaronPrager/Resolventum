@@ -45,6 +45,8 @@ model Student {
   difficulties String?  // Learning difficulties or areas of struggle
   pricePerLesson Float?  // Price per individual lesson
   pricePerPackage Float? // Price per package of 10 lessons
+  usePackages   Boolean @default(false) // Whether this student uses packages
+  credit       Float    @default(0) // Credit balance for student account
   
   // Parent Details
   parentFullName String?
@@ -75,12 +77,18 @@ model Lesson {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId String
   student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  packageId String?  // Link to package if this lesson was paid with a package
+  package   Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  paymentId String?  // Link to payment if this lesson was paid with a specific payment
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
   dateTime  DateTime
   duration  Int      // in minutes
   subject   String
   notes     String?
   status    String   @default("scheduled") // scheduled, completed, cancelled, rescheduled
   price     Float    // individual lesson price
+  isPaid    Boolean  @default(false)  // Track if lesson has been fully paid
+  paidAmount Float   @default(0)      // Amount paid towards this lesson (for partial payments)
   locationType String  @default("in-person") // remote, in-person
   link      String?  // Video call link for remote lessons
   isRecurring Boolean @default(false)
@@ -96,6 +104,8 @@ model Lesson {
   @@index([studentId])
   @@index([dateTime])
   @@index([recurringGroupId])
+  @@index([packageId])
+  @@index([paymentId])
 }
 
 model Package {
@@ -104,6 +114,8 @@ model Package {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  paymentId   String?  @unique // Link to the payment that created this package
+  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   name        String
   totalHours  Float    // Total hours in the package
   hoursUsed   Float    @default(0)  // Hours consumed from the package
@@ -114,6 +126,8 @@ model Package {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  lessons    Lesson[] // Lessons paid with this package
+  
   @@index([userId])
   @@index([studentId])
 }
@@ -124,6 +138,9 @@ model Payment {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  packageId   String?  @unique // Link to package if this payment is for a package
+  package     Package? @relation
+  lessons     Lesson[] // Lessons paid with this payment
   amount      Float
   date        DateTime @default(now())
   method      String   // cash, card, bank_transfer

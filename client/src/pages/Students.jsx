@@ -26,6 +26,7 @@ export function Students() {
     difficulties: '',
     pricePerLesson: '',
     pricePerPackage: '',
+    usePackages: false,
     parentFullName: '',
     parentAddress: '',
     parentPhone: '',
@@ -37,6 +38,9 @@ export function Students() {
   const [families, setFamilies] = useState([])
   const [newFamilyId, setNewFamilyId] = useState('')
   const [useNewFamily, setUseNewFamily] = useState(false)
+  const [showCreditModal, setShowCreditModal] = useState(false)
+  const [creditAction, setCreditAction] = useState('set') // 'set', 'add', 'subtract'
+  const [creditAmount, setCreditAmount] = useState('')
 
   useEffect(() => {
     fetchStudents()
@@ -142,6 +146,7 @@ export function Students() {
         difficulties: formData.difficulties || null,
         pricePerLesson: formData.pricePerLesson ? parseFloat(formData.pricePerLesson) : null,
         pricePerPackage: formData.pricePerPackage ? parseFloat(formData.pricePerPackage) : null,
+        usePackages: Boolean(formData.usePackages),
         parentFullName: formData.parentFullName || null,
         parentAddress: formData.parentAddress || null,
         parentPhone: formData.parentPhone || null,
@@ -192,6 +197,7 @@ export function Students() {
       difficulties: selectedStudent.difficulties || '',
       pricePerLesson: selectedStudent.pricePerLesson || '',
       pricePerPackage: selectedStudent.pricePerPackage || '',
+      usePackages: selectedStudent.usePackages === true || selectedStudent.usePackages === 1,
       parentFullName: selectedStudent.parentFullName || '',
       parentAddress: selectedStudent.parentAddress || '',
       parentPhone: selectedStudent.parentPhone || '',
@@ -218,6 +224,73 @@ export function Students() {
       fetchStudents()
     } catch (error) {
       toast.error('Failed to delete student')
+    }
+  }
+
+  const handleUpdateCredit = async () => {
+    if (!selectedStudent) return
+    
+    if (!creditAmount || isNaN(parseFloat(creditAmount))) {
+      toast.error('Please enter a valid credit amount')
+      return
+    }
+
+    try {
+      const { data } = await api.patch(`/students/${selectedStudent.id}/credit`, {
+        credit: parseFloat(creditAmount),
+        action: creditAction
+      })
+      toast.success(data.message || 'Credit updated successfully')
+      setShowCreditModal(false)
+      setCreditAmount('')
+      setCreditAction('set')
+      // Refresh student data
+      const { data: updatedStudent } = await api.get(`/students/${selectedStudent.id}`)
+      setSelectedStudent(updatedStudent)
+      fetchStudents()
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update credit')
+    }
+  }
+
+  const handleOpenCreditModal = () => {
+    if (!selectedStudent) return
+    setCreditAmount('')
+    setCreditAction('set')
+    setShowCreditModal(true)
+  }
+
+  const handleDeleteAllLessons = async () => {
+    if (!selectedStudent) return
+    
+    const confirmMessage = `Are you sure you want to delete ALL lessons for ${selectedStudent.firstName} ${selectedStudent.lastName}? This action cannot be undone.`
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    try {
+      const { data } = await api.delete(`/students/${selectedStudent.id}/lessons`)
+      toast.success(data.message || `Deleted ${data.deletedCount} lessons`)
+      fetchStudents() // Refresh to update any lesson counts
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to delete lessons')
+    }
+  }
+
+  const handleRecalculatePrices = async () => {
+    if (!selectedStudent) return
+    
+    const confirmMessage = `Recalculate all lesson prices for ${selectedStudent.firstName} ${selectedStudent.lastName} based on current packages? This will update lesson prices to reflect package rates.`
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    try {
+      const { data } = await api.post(`/students/${selectedStudent.id}/recalculate-prices`)
+      toast.success(data.message || `Recalculated prices for ${data.updatedCount} lessons`)
+      fetchStudents() // Refresh to update any lesson counts
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to recalculate prices')
     }
   }
 
@@ -344,6 +417,7 @@ export function Students() {
       difficulties: '',
       pricePerLesson: '',
       pricePerPackage: '',
+      usePackages: false,
       parentFullName: '',
       parentAddress: '',
       parentPhone: '',
@@ -600,6 +674,20 @@ export function Students() {
                       <Edit className="h-4 w-4" />
                     </button>
                     <button
+                      onClick={handleRecalculatePrices}
+                      className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+                      title="Recalculate all lesson prices based on packages"
+                    >
+                      <DollarSign className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={handleDeleteAllLessons}
+                      className="p-1.5 rounded-md text-orange-600 hover:bg-orange-50 transition-colors"
+                      title="Delete all lessons for this student"
+                    >
+                      <Calendar className="h-4 w-4" />
+                    </button>
+                    <button
                       onClick={handleDeleteStudent}
                       className="p-1.5 rounded-md text-red-600 hover:bg-red-50 transition-colors"
                       title="Delete student"
@@ -686,7 +774,7 @@ export function Students() {
                   <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Pricing</h3>
                   <div className="flex items-start gap-2 text-sm">
                     <DollarSign className="h-4 w-4 text-gray-400 mt-0.5" />
-                    <div className="space-y-0.5">
+                    <div className="space-y-0.5 flex-1">
                       <div className={selectedStudent.pricePerLesson ? "text-gray-900" : "text-gray-400"}>
                         {selectedStudent.pricePerLesson 
                           ? `$${parseFloat(selectedStudent.pricePerLesson).toFixed(2)} per hour`
@@ -696,6 +784,26 @@ export function Students() {
                         {selectedStudent.pricePerPackage 
                           ? `$${parseFloat(selectedStudent.pricePerPackage).toFixed(2)} per package of 10`
                           : 'Per package: -'}
+                      </div>
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-200">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-600">Credit:</span>
+                          <span className={`font-semibold ${(selectedStudent.credit || 0) > 0 ? 'text-blue-700' : 'text-gray-900'}`}>
+                            ${((selectedStudent.credit || 0)).toFixed(2)}
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleOpenCreditModal}
+                          className="text-xs text-indigo-600 hover:text-indigo-900 font-medium"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200">
+                        <span className="text-gray-600">Uses Packages:</span>
+                        <span className={`text-sm font-medium ${selectedStudent.usePackages ? 'text-green-700' : 'text-gray-500'}`}>
+                          {selectedStudent.usePackages ? 'Yes' : 'No'}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -929,6 +1037,22 @@ export function Students() {
                       />
                     </div>
 
+                    {/* Use Packages Checkbox */}
+                    <div className="flex items-center py-2">
+                      <label className="w-32 text-sm text-gray-600">Use Packages</label>
+                      <div className="flex-1 flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={!!formData.usePackages}
+                          onChange={(e) => setFormData({ ...formData, usePackages: Boolean(e.target.checked) })}
+                          className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                        />
+                        <span className="text-xs text-gray-500">
+                          Allow this student to purchase and use packages
+                        </span>
+                      </div>
+                    </div>
+
                     {/* Parent Full Name */}
                     <div className="flex items-center py-2 mt-4">
                       <label className="w-32 text-sm text-gray-600 font-medium">Parent Name</label>
@@ -1128,6 +1252,106 @@ export function Students() {
                     className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md"
                   >
                     Import Student
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Credit Edit Modal */}
+      {showCreditModal && selectedStudent && (
+        <div className="fixed z-10 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowCreditModal(false)}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-md sm:w-full">
+              <div className="bg-white">
+                <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Update Credit - {selectedStudent.firstName} {selectedStudent.lastName}
+                  </h3>
+                  <button
+                    onClick={() => {
+                      setShowCreditModal(false)
+                      setCreditAmount('')
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                
+                <div className="px-6 py-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Current Credit: <span className="font-semibold text-blue-700">${((selectedStudent.credit || 0)).toFixed(2)}</span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Action
+                    </label>
+                    <select
+                      value={creditAction}
+                      onChange={(e) => setCreditAction(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                    >
+                      <option value="set">Set to amount</option>
+                      <option value="add">Add amount</option>
+                      <option value="subtract">Subtract amount</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Amount ($)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={creditAmount}
+                      onChange={(e) => setCreditAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                      autoFocus
+                    />
+                    {creditAction === 'add' && creditAmount && (
+                      <p className="mt-1 text-sm text-gray-500">
+                        New credit: ${((selectedStudent.credit || 0) + parseFloat(creditAmount || 0)).toFixed(2)}
+                      </p>
+                    )}
+                    {creditAction === 'subtract' && creditAmount && (
+                      <p className="mt-1 text-sm text-gray-500">
+                        New credit: ${((selectedStudent.credit || 0) - parseFloat(creditAmount || 0)).toFixed(2)}
+                      </p>
+                    )}
+                    {creditAction === 'set' && creditAmount && (
+                      <p className="mt-1 text-sm text-gray-500">
+                        New credit: ${parseFloat(creditAmount || 0).toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreditModal(false)
+                      setCreditAmount('')
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUpdateCredit}
+                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                    Update Credit
                   </button>
                 </div>
               </div>

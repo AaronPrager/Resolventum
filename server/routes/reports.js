@@ -466,7 +466,7 @@ router.get('/monthly-student', async (req, res) => {
     // Verify student belongs to user
     const student = await prisma.student.findFirst({ 
       where: { id: studentId, userId }, 
-      select: { pricePerLesson: true, firstName: true, lastName: true } 
+      select: { pricePerLesson: true, firstName: true, lastName: true, credit: true } 
     });
 
     if (!student) {
@@ -521,7 +521,11 @@ router.get('/monthly-student', async (req, res) => {
     });
     const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
 
+    // Ending balance = billed - paid, but we also need to account for credit
+    // Credit is money that has been paid but not yet applied to lessons
+    // So endingBalance should be: billed - paid, and separately show credit available
     const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+    const creditBalance = student.credit || 0;
 
     res.json({
       studentName: `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim(),
@@ -531,6 +535,7 @@ router.get('/monthly-student', async (req, res) => {
       billedThisMonth,
       paidThisMonth,
       endingBalance,
+      creditBalance, // Credit available to apply to future lessons
       lessonsThisMonth,
       payments
     });

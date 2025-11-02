@@ -16,7 +16,9 @@ export function Reports() {
   const [loading, setLoading] = useState(true)
   const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'paymentHistory'|'monthlyTotals'|'schedule'|'attendance'|'cancellations'|'packages'
   const [packagesReport, setPackagesReport] = useState({ packages: [], summary: {} })
-  const [packagesFilter, setPackagesFilter] = useState('active') // 'all', 'active', 'inactive'
+  const [packagesFilter, setPackagesFilter] = useState('all') // 'all', 'active', 'inactive'
+  const [selectedPackageId, setSelectedPackageId] = useState(null)
+  const [packageLessons, setPackageLessons] = useState([])
   const [scheduleRange, setScheduleRange] = useState('week') // 'week' | 'month'
   const [scheduleLessons, setScheduleLessons] = useState([])
   const [attendanceLessons, setAttendanceLessons] = useState([])
@@ -101,8 +103,33 @@ export function Reports() {
     const interval = setInterval(fetchData, 60 * 1000)
     const onFocus = () => fetchData()
     window.addEventListener('focus', onFocus)
-    return () => clearInterval(interval)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [])
+
+  // Auto-load packages report when packages report is active
+  useEffect(() => {
+    if (activeReport === 'packages') {
+      const loadPackages = async () => {
+        try {
+          const { data } = await api.get('/reports/packages', { params: { status: packagesFilter } })
+          console.log('Packages report data loaded:', data)
+          if (data && data.packages) {
+            setPackagesReport(data)
+          } else {
+            console.error('Invalid packages report data structure:', data)
+            setPackagesReport({ packages: [], summary: {} })
+          }
+        } catch (error) {
+          console.error('Failed to load packages report:', error)
+          toast.error(error.response?.data?.message || 'Failed to load packages report')
+        }
+      }
+      loadPackages()
+    }
+  }, [activeReport, packagesFilter])
 
   const formatCurrency = (amount) => {
     const num = Number(amount) || 0
@@ -302,9 +329,17 @@ export function Reports() {
                   setActiveReport('packages')
                   try {
                     const { data } = await api.get('/reports/packages', { params: { status: packagesFilter } })
-                    setPackagesReport(data)
+                    console.log('Packages report data:', data)
+                    if (data && data.packages) {
+                      setPackagesReport(data)
+                    } else {
+                      console.error('Invalid packages report data structure:', data)
+                      setPackagesReport({ packages: [], summary: {} })
+                      toast.error('Invalid packages report data received')
+                    }
                   } catch (error) {
-                    toast.error('Failed to load packages report')
+                    console.error('Failed to load packages report:', error)
+                    toast.error(error.response?.data?.message || 'Failed to load packages report')
                   }
                 }}
                 className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'packages' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
@@ -657,9 +692,16 @@ export function Reports() {
                       setPackagesFilter(newFilter)
                       try {
                         const { data } = await api.get('/reports/packages', { params: { status: newFilter } })
-                        setPackagesReport(data)
+                        console.log('Packages report data after filter change:', data)
+                        if (data && data.packages) {
+                          setPackagesReport(data)
+                        } else {
+                          console.error('Invalid packages report data structure:', data)
+                          setPackagesReport({ packages: [], summary: {} })
+                        }
                       } catch (error) {
-                        toast.error('Failed to load packages report')
+                        console.error('Failed to load packages report:', error)
+                        toast.error(error.response?.data?.message || 'Failed to load packages report')
                       }
                     }}
                     className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-0"
@@ -722,6 +764,7 @@ export function Reports() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price / Rate</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Purchased</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expires</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lessons</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
@@ -738,56 +781,142 @@ export function Reports() {
                           'Inactive': 'bg-gray-100 text-gray-800'
                         }
                         return (
-                          <tr key={pkg.id} className="hover:bg-gray-50">
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm font-medium text-gray-900">{pkg.name}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">
-                                {pkg.student.firstName} {pkg.student.lastName}
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColors[pkg.status] || 'bg-gray-100 text-gray-800'}`}>
-                                {pkg.status}
-                              </span>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">
-                                <span className="font-medium">{pkg.hoursRemaining.toFixed(2)}</span>
-                                <span className="text-gray-500"> / {pkg.totalHours.toFixed(2)}</span>
-                              </div>
-                              <div className="text-xs text-gray-500">Used: {pkg.hoursUsed.toFixed(2)}h</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="flex items-center">
-                                <div className="flex-1 bg-gray-200 rounded-full h-2 mr-2" style={{ minWidth: '60px' }}>
-                                  <div 
-                                    className={`h-2 rounded-full ${
-                                      pkg.utilizationPercent >= 100 ? 'bg-yellow-600' :
-                                      pkg.utilizationPercent >= 75 ? 'bg-orange-500' :
-                                      'bg-green-500'
-                                    }`}
-                                    style={{ width: `${Math.min(pkg.utilizationPercent, 100)}%` }}
-                                  ></div>
+                          <>
+                            <tr key={pkg.id} className="hover:bg-gray-50">
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm font-medium text-gray-900">{pkg.name}</div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm text-gray-900">
+                                  {pkg.student.firstName} {pkg.student.lastName}
                                 </div>
-                                <span className="text-sm text-gray-900">{pkg.utilizationPercent.toFixed(1)}%</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">${pkg.price.toFixed(2)}</div>
-                              <div className="text-xs text-gray-500">${pkg.packageHourlyRate.toFixed(2)}/hr</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {new Date(pkg.purchasedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                              {pkg.expiresAt 
-                                ? new Date(pkg.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-                                : 'No expiry'
-                              }
-                            </td>
-                          </tr>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColors[pkg.status] || 'bg-gray-100 text-gray-800'}`}>
+                                  {pkg.status}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm text-gray-900">
+                                  <span className="font-medium">{pkg.hoursRemaining.toFixed(2)}</span>
+                                  <span className="text-gray-500"> / {pkg.totalHours.toFixed(2)}</span>
+                                </div>
+                                <div className="text-xs text-gray-500">Used: {pkg.hoursUsed.toFixed(2)}h</div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="flex items-center">
+                                  <div className="flex-1 bg-gray-200 rounded-full h-2 mr-2" style={{ minWidth: '60px' }}>
+                                    <div 
+                                      className={`h-2 rounded-full ${
+                                        pkg.utilizationPercent >= 100 ? 'bg-yellow-600' :
+                                        pkg.utilizationPercent >= 75 ? 'bg-orange-500' :
+                                        'bg-green-500'
+                                      }`}
+                                      style={{ width: `${Math.min(pkg.utilizationPercent, 100)}%` }}
+                                    ></div>
+                                  </div>
+                                  <span className="text-sm text-gray-900">{pkg.utilizationPercent.toFixed(1)}%</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <div className="text-sm text-gray-900">${pkg.price.toFixed(2)}</div>
+                                <div className="text-xs text-gray-500">${pkg.packageHourlyRate.toFixed(2)}/hr</div>
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                {new Date(pkg.purchasedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                {pkg.expiresAt 
+                                  ? new Date(pkg.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                                  : 'No expiry'
+                                }
+                              </td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                <button
+                                  onClick={async () => {
+                                    if (selectedPackageId === pkg.id) {
+                                      setSelectedPackageId(null)
+                                      setPackageLessons([])
+                                    } else {
+                                      setSelectedPackageId(pkg.id)
+                                      try {
+                                        const { data } = await api.get(`/packages/${pkg.id}/usage`)
+                                        setPackageLessons(data.usage || [])
+                                      } catch (error) {
+                                        console.error('Failed to load package lessons:', error)
+                                        toast.error('Failed to load package lessons')
+                                      }
+                                    }
+                                  }}
+                                  className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                                >
+                                  {selectedPackageId === pkg.id ? 'Hide' : 'View'} Lessons
+                                </button>
+                              </td>
+                            </tr>
+                            {selectedPackageId === pkg.id && (
+                              <tr>
+                                <td colSpan="9" className="px-6 py-4 bg-gray-50">
+                                  <div className="mt-2">
+                                    <h4 className="text-sm font-semibold text-gray-900 mb-3">Lessons Covered by This Package</h4>
+                                    {packageLessons.length === 0 ? (
+                                      <p className="text-sm text-gray-500">No lessons have been covered by this package yet.</p>
+                                    ) : (
+                                      <div className="overflow-x-auto">
+                                        <table className="min-w-full divide-y divide-gray-200">
+                                          <thead className="bg-white">
+                                            <tr>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Subject</th>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Payment</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="bg-white divide-y divide-gray-200">
+                                            {packageLessons.map((lesson) => (
+                                              <tr key={lesson.lessonId}>
+                                                <td className="px-4 py-2 text-sm text-gray-900">
+                                                  {new Date(lesson.date).toLocaleDateString()}
+                                                </td>
+                                                <td className="px-4 py-2 text-sm text-gray-900">{lesson.subject}</td>
+                                                <td className="px-4 py-2 text-sm text-gray-900">
+                                                  {lesson.hours.toFixed(2)}h ({lesson.duration} min)
+                                                </td>
+                                                <td className="px-4 py-2 text-sm text-gray-900">
+                                                  ${lesson.price.toFixed(2)}
+                                                  <span className="text-xs text-gray-500 ml-1">
+                                                    (${lesson.pricePerHour.toFixed(2)}/hr)
+                                                  </span>
+                                                </td>
+                                                <td className="px-4 py-2 text-sm">
+                                                  <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                                                    lesson.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                                    lesson.status === 'cancelled' || lesson.status === 'canceled' ? 'bg-gray-100 text-gray-800' :
+                                                    'bg-yellow-100 text-yellow-800'
+                                                  }`}>
+                                                    {lesson.status}
+                                                  </span>
+                                                </td>
+                                                <td className="px-4 py-2 text-sm text-gray-900">
+                                                  {lesson.isPaid ? (
+                                                    <span className="text-green-600 font-medium">${lesson.paidAmount.toFixed(2)} Paid</span>
+                                                  ) : (
+                                                    <span className="text-gray-500">Unpaid</span>
+                                                  )}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </>
                         )
                       })
                     )}
@@ -888,7 +1017,7 @@ export function Reports() {
                   <div className="text-sm text-gray-500">Select student and month, then click Generate.</div>
                 ) : (
                   <div ref={statementRef}>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Previous Balance</p>
                         <p className={`text-xl font-semibold ${studentStatement.previousBalance < 0 ? 'text-green-700' : 'text-gray-900'}`}>${(studentStatement.previousBalance || 0).toFixed(2)}</p>
@@ -900,6 +1029,10 @@ export function Reports() {
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Payments</p>
                         <p className="text-xl font-semibold text-gray-900">${(studentStatement.paidThisMonth || 0).toFixed(2)}</p>
+                      </div>
+                      <div className="bg-white border rounded-md p-4">
+                        <p className="text-xs text-gray-500">Credit Available</p>
+                        <p className="text-xl font-semibold text-blue-700">${(studentStatement.creditBalance || 0).toFixed(2)}</p>
                       </div>
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Ending Balance</p>

@@ -159,6 +159,7 @@ router.post(
         difficulties: req.body.difficulties,
         pricePerLesson: req.body.pricePerLesson,
         pricePerPackage: req.body.pricePerPackage,
+        usePackages: req.body.usePackages !== undefined ? Boolean(req.body.usePackages) : false,
         parentFullName: req.body.parentFullName,
         parentAddress: req.body.parentAddress,
         parentPhone: req.body.parentPhone,
@@ -207,6 +208,7 @@ router.put('/:id', async (req, res) => {
       difficulties: req.body.difficulties,
       pricePerLesson: req.body.pricePerLesson,
       pricePerPackage: req.body.pricePerPackage,
+      usePackages: req.body.usePackages !== undefined ? Boolean(req.body.usePackages) : existing.usePackages,
       parentFullName: req.body.parentFullName,
       parentAddress: req.body.parentAddress,
       parentPhone: req.body.parentPhone,
@@ -226,6 +228,165 @@ router.put('/:id', async (req, res) => {
     console.error('Update student error:', error);
     console.error('Error details:', error.message);
     res.status(500).json({ message: 'Error updating student', error: error.message });
+  }
+});
+
+// Recalculate all lesson prices for a student based on current packages
+router.post('/:id/recalculate-prices', async (req, res) => {
+  try {
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Get all lessons for this student (not cancelled, ordered by date)
+    const lessons = await prisma.lesson.findMany({
+      where: {
+        studentId: req.params.id,
+        userId: req.user.id,
+        NOT: { status: { in: ['cancelled', 'canceled'] } }
+      },
+      orderBy: { dateTime: 'asc' }
+    });
+
+    // Get all active packages for this student (ordered by purchase date)
+    const packages = await prisma.package.findMany({
+      where: {
+        userId: req.user.id,
+        studentId: req.params.id,
+        isActive: true,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+      },
+      orderBy: { purchasedAt: 'asc' }
+    });
+
+    const studentHourlyRate = student.pricePerLesson || 0;
+    let updatedCount = 0;
+
+    // We need to recalculate based on chronological application of packages
+    // Start with packages at their current database state, but recalculate as if we're applying them fresh
+    // The key is: lessons created AFTER package purchase should use package rate if package has hours
+    
+    // Track package hours as we go through lessons chronologically
+    const packageState = packages.map(pkg => ({
+      id: pkg.id,
+      price: pkg.price,
+      totalHours: pkg.totalHours,
+      hoursUsedSoFar: 0 // Track cumulative usage as we process lessons in order
+    }));
+
+    // Recalculate each lesson price based on package availability at that point in time
+    // Process lessons in chronological order
+    for (const lesson of lessons) {
+      const lessonHours = lesson.duration / 60; // Convert minutes to hours
+      let newPrice = 0;
+      let remainingHours = lessonHours;
+
+      // Check which packages were available when this lesson was scheduled
+      // A package is available if:
+      // 1. It was purchased before or on the lesson date
+      // 2. It is currently active (for recalculation, we consider all active packages regardless of purchase date)
+      //    since we're recalculating what the prices SHOULD be based on current package state
+      const availablePackages = packageState.map((pkgState, idx) => {
+        const pkg = packages[idx];
+        return {
+          ...pkgState,
+          purchasedAt: new Date(pkg.purchasedAt),
+          originalIndex: idx
+        };
+      }).filter((pkgStateWithDate, idx) => {
+        // For recalculation, consider all active packages
+        // Lessons created before package purchase will use student rate
+        // Lessons created after package purchase should use package rate if hours available
+        return pkgStateWithDate.purchasedAt <= new Date(lesson.dateTime);
+      });
+
+      // Try to use available packages in order to cover the lesson
+      for (let i = 0; i < availablePackages.length && remainingHours > 0; i++) {
+        const pkgStateWithDate = availablePackages[i];
+        const availableHours = pkgStateWithDate.totalHours - pkgStateWithDate.hoursUsedSoFar;
+
+        if (availableHours <= 0) continue;
+
+        const packageHourlyRate = pkgStateWithDate.price / pkgStateWithDate.totalHours;
+        const hoursFromThisPackage = Math.min(remainingHours, availableHours);
+        newPrice += packageHourlyRate * hoursFromThisPackage;
+        remainingHours -= hoursFromThisPackage;
+        
+        // Update tracked usage for the original package state
+        packageState[pkgStateWithDate.originalIndex].hoursUsedSoFar += hoursFromThisPackage;
+      }
+
+      // If any hours remain uncovered, use student rate
+      if (remainingHours > 0) {
+        newPrice += studentHourlyRate * remainingHours;
+      }
+
+      // Update lesson price if it changed (rounded to 2 decimals)
+      const roundedNewPrice = Math.round(newPrice * 100) / 100;
+      const roundedOldPrice = Math.round((lesson.price || 0) * 100) / 100;
+
+      if (roundedNewPrice !== roundedOldPrice) {
+        await prisma.lesson.update({
+          where: { id: lesson.id },
+          data: { price: roundedNewPrice }
+        });
+        updatedCount++;
+        console.log(`Updated lesson ${lesson.id} (${lesson.dateTime.toISOString().split('T')[0]}) from $${roundedOldPrice} to $${roundedNewPrice}`);
+      }
+    }
+
+    res.json({
+      message: `Recalculated prices for ${lessons.length} lessons (${updatedCount} updated)`,
+      totalLessons: lessons.length,
+      updatedCount,
+      studentName: `${student.firstName} ${student.lastName}`
+    });
+  } catch (error) {
+    console.error('Recalculate prices error:', error);
+    res.status(500).json({ message: 'Error recalculating lesson prices' });
+  }
+});
+
+// Delete all lessons for a student
+router.delete('/:id/lessons', async (req, res) => {
+  try {
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({
+      where: { id: req.params.id, userId: req.user.id }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Count lessons before deletion
+    const count = await prisma.lesson.count({
+      where: {
+        studentId: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    // Delete all lessons for this student
+    await prisma.lesson.deleteMany({
+      where: {
+        studentId: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    res.json({
+      message: `Deleted ${count} lessons for ${student.firstName} ${student.lastName}`,
+      deletedCount: count
+    });
+  } catch (error) {
+    console.error('Delete student lessons error:', error);
+    res.status(500).json({ message: 'Error deleting student lessons' });
   }
 });
 
@@ -280,6 +441,69 @@ router.patch('/:id/archive', async (req, res) => {
   } catch (error) {
     console.error('Archive student error:', error);
     res.status(500).json({ message: 'Error archiving student' });
+  }
+});
+
+// Update student credit
+router.patch('/:id/credit', async (req, res) => {
+  try {
+    const { credit, action } = req.body; // credit: amount, action: 'set' | 'add' | 'subtract'
+    
+    // Validate credit amount
+    if (credit === undefined || credit === null) {
+      return res.status(400).json({ message: 'Credit amount is required' });
+    }
+    
+    const creditAmount = parseFloat(credit);
+    if (isNaN(creditAmount)) {
+      return res.status(400).json({ message: 'Credit must be a valid number' });
+    }
+    
+    // Verify student belongs to user
+    const student = await prisma.student.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    const currentCredit = student.credit || 0;
+    let newCredit;
+    
+    // Determine new credit value based on action
+    switch (action) {
+      case 'add':
+        newCredit = currentCredit + creditAmount;
+        break;
+      case 'subtract':
+        newCredit = currentCredit - creditAmount;
+        break;
+      case 'set':
+      default:
+        newCredit = creditAmount;
+        break;
+    }
+
+    const updatedStudent = await prisma.student.update({
+      where: { id: req.params.id },
+      data: { credit: newCredit }
+    });
+
+    console.log(`[Credit Update] Student ${student.firstName} ${student.lastName}: ${action || 'set'} credit from $${currentCredit.toFixed(2)} to $${newCredit.toFixed(2)}`);
+
+    res.json({
+      message: `Credit ${action || 'set'} successfully`,
+      previousCredit: currentCredit,
+      newCredit: newCredit,
+      student: updatedStudent
+    });
+  } catch (error) {
+    console.error('Update credit error:', error);
+    res.status(500).json({ message: 'Error updating credit' });
   }
 });
 

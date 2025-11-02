@@ -50,6 +50,9 @@ export function Lessons() {
   const [sortConfig, setSortConfig] = useState({ key: 'dateTime', direction: 'asc' })
   const [selectedLesson, setSelectedLesson] = useState(null)
   const [students, setStudents] = useState([])
+  const [selectedStudentFilter, setSelectedStudentFilter] = useState('')
+  const [showUnpaidOnly, setShowUnpaidOnly] = useState(false)
+  const [showPastOnly, setShowPastOnly] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [showRecurringOptions, setShowRecurringOptions] = useState(false)
@@ -136,11 +139,41 @@ export function Lessons() {
     try {
       const { data } = await api.get('/lessons')
       setLessons(data)
-      setSortedLessons(sortLessonData(data, sortConfig.key, sortConfig.direction))
+      applyFilterAndSort(data)
     } catch (error) {
       toast.error('Failed to load lessons')
     }
   }
+
+  const applyFilterAndSort = (lessonsData) => {
+    // Filter by student if selected
+    let filteredLessons = lessonsData
+    if (selectedStudentFilter) {
+      filteredLessons = filteredLessons.filter(lesson => lesson.studentId === selectedStudentFilter)
+    }
+    
+    // Filter by unpaid only if enabled
+    if (showUnpaidOnly) {
+      filteredLessons = filteredLessons.filter(lesson => !lesson.isPaid)
+    }
+    
+    // Filter by past lessons only if enabled
+    if (showPastOnly) {
+      const now = new Date()
+      filteredLessons = filteredLessons.filter(lesson => {
+        const lessonDate = new Date(lesson.dateTime)
+        return lessonDate < now
+      })
+    }
+    
+    // Apply sorting
+    setSortedLessons(sortLessonData(filteredLessons, sortConfig.key, sortConfig.direction))
+  }
+
+  useEffect(() => {
+    applyFilterAndSort(lessons)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStudentFilter, showUnpaidOnly, showPastOnly, sortConfig.key, sortConfig.direction])
 
   const fetchStudents = async () => {
     try {
@@ -158,6 +191,13 @@ export function Lessons() {
       if (key === 'studentName') {
         aValue = `${a.student.firstName} ${a.student.lastName}`.toLowerCase()
         bValue = `${b.student.firstName} ${b.student.lastName}`.toLowerCase()
+      } else if (key === 'isPaid') {
+        // Sort boolean: true (paid) comes after false (unpaid) in ascending order
+        if (direction === 'asc') {
+          return a.isPaid === b.isPaid ? 0 : a.isPaid ? 1 : -1
+        } else {
+          return a.isPaid === b.isPaid ? 0 : a.isPaid ? -1 : 1
+        }
       } else {
         aValue = a[key]
         bValue = b[key]
@@ -187,10 +227,8 @@ export function Lessons() {
     if (sortConfig.key === key && sortConfig.direction === 'asc') {
       direction = 'desc'
     }
-
-    const sorted = sortLessonData(lessons, key, direction)
-    setSortedLessons(sorted)
     setSortConfig({ key, direction })
+    // Filter and sort will be applied by useEffect
   }
 
   const SortIcon = ({ column }) => {
@@ -492,18 +530,73 @@ export function Lessons() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Lessons List - Takes 2 columns */}
         <div className="lg:col-span-2 bg-white rounded-lg shadow">
-          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Lessons</h2>
-              <p className="text-sm text-gray-500 mt-1">{lessons.length} {lessons.length === 1 ? 'lesson' : 'lessons'}</p>
+          <div className="p-4 border-b border-gray-200">
+            <div className="flex justify-between items-center mb-3">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Lessons</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {selectedStudentFilter ? sortedLessons.length : lessons.length} {selectedStudentFilter ? sortedLessons.length === 1 ? 'lesson' : 'lessons' : lessons.length === 1 ? 'lesson' : 'lessons'}
+                  {selectedStudentFilter && ` (filtered from ${lessons.length} total)`}
+                </p>
+              </div>
+              <button
+                onClick={handleAddLesson}
+                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                title="Schedule new lesson"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
             </div>
-            <button
-              onClick={handleAddLesson}
-              className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-              title="Schedule new lesson"
-            >
-              <Plus className="h-5 w-5" />
-            </button>
+            {/* Filters */}
+            <div className="space-y-2">
+              {/* Student Filter */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-600 whitespace-nowrap">Filter by student:</label>
+                <select
+                  value={selectedStudentFilter}
+                  onChange={(e) => setSelectedStudentFilter(e.target.value)}
+                  className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                >
+                  <option value="">All Students</option>
+                  {students
+                    .filter(s => !s.archived)
+                    .sort((a, b) => {
+                      const nameA = `${a.firstName} ${a.lastName}`.toLowerCase()
+                      const nameB = `${b.firstName} ${b.lastName}`.toLowerCase()
+                      return nameA.localeCompare(nameB)
+                    })
+                    .map(student => (
+                      <option key={student.id} value={student.id}>
+                        {student.firstName} {student.lastName}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              {/* Quick Filters */}
+              <div className="flex items-center gap-4">
+                <label className="text-sm text-gray-600 whitespace-nowrap">Quick filters:</label>
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showUnpaidOnly}
+                      onChange={(e) => setShowUnpaidOnly(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700">Unpaid only</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showPastOnly}
+                      onChange={(e) => setShowPastOnly(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-gray-700">Past lessons only</span>
+                  </label>
+                </div>
+              </div>
+            </div>
           </div>
           
           {/* Sortable Column Headers */}
@@ -517,14 +610,14 @@ export function Lessons() {
                 <SortIcon column="studentName" />
               </div>
               <div 
-                className="col-span-3 flex items-center cursor-pointer hover:text-gray-700"
+                className="col-span-2 flex items-center cursor-pointer hover:text-gray-700"
                 onClick={() => sortData('dateTime')}
               >
                 Date
                 <SortIcon column="dateTime" />
               </div>
               <div 
-                className="col-span-3 flex items-center cursor-pointer hover:text-gray-700"
+                className="col-span-2 flex items-center cursor-pointer hover:text-gray-700"
                 onClick={() => sortData('dateTime')}
               >
                 Time
@@ -536,6 +629,13 @@ export function Lessons() {
               >
                 Subject
                 <SortIcon column="subject" />
+              </div>
+              <div 
+                className="col-span-2 flex items-center cursor-pointer hover:text-gray-700"
+                onClick={() => sortData('isPaid')}
+              >
+                Paid
+                <SortIcon column="isPaid" />
               </div>
             </div>
           )}
@@ -569,18 +669,29 @@ export function Lessons() {
                         </div>
                         
                         {/* Date Column */}
-                        <div className="col-span-3">
+                        <div className="col-span-2">
                           <span className="text-sm text-gray-900">{formatDate(lesson.dateTime)}</span>
                         </div>
                         
                         {/* Time Column */}
-                        <div className="col-span-3">
+                        <div className="col-span-2">
                           <span className="text-sm text-gray-900">{formatTime(lesson.dateTime, lesson.duration, lesson.allDay)}</span>
                         </div>
                         
                         {/* Subject Column */}
                         <div className="col-span-3">
                           <span className="text-sm text-gray-900">{lesson.subject || '-'}</span>
+                        </div>
+                        
+                        {/* Paid Column */}
+                        <div className="col-span-2">
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                            lesson.isPaid 
+                              ? 'bg-green-100 text-green-800' 
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {lesson.isPaid ? 'Paid' : 'Unpaid'}
+                          </span>
                         </div>
                       </div>
                     </li>
@@ -684,7 +795,99 @@ export function Lessons() {
                       ${parseFloat(selectedLesson.price).toFixed(2)}
                     </span>
                   </div>
+                  {selectedLesson.paidAmount > 0 && (
+                    <div className="text-sm ml-6">
+                      <span className="text-gray-600">Paid: </span>
+                      <span className={`font-medium ${
+                        selectedLesson.paidAmount >= selectedLesson.price 
+                          ? 'text-green-600' 
+                          : 'text-yellow-600'
+                      }`}>
+                        ${selectedLesson.paidAmount.toFixed(2)}
+                      </span>
+                      {selectedLesson.paidAmount < selectedLesson.price && (
+                        <span className="text-gray-500 ml-1">
+                          (${(selectedLesson.price - selectedLesson.paidAmount).toFixed(2)} remaining)
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
+
+                {/* Payment Information */}
+                {selectedLesson.isPaid || selectedLesson.paidAmount > 0 ? (
+                  <div className="space-y-1.5 pt-2 border-t">
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</h3>
+                    <div className="text-sm space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          selectedLesson.isPaid 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {selectedLesson.isPaid ? 'Fully Paid' : 'Partially Paid'}
+                        </span>
+                      </div>
+                      
+                      {selectedLesson.package ? (
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-600">Covered by Package:</span>
+                            <a
+                              href={`#packages`}
+                              onClick={(e) => {
+                                e.preventDefault()
+                                // Navigate to payments page with package focus
+                                window.location.href = '/payments'
+                              }}
+                              className="text-indigo-600 hover:text-indigo-900 font-medium"
+                            >
+                              {selectedLesson.package.name}
+                            </a>
+                          </div>
+                          <div className="text-xs text-gray-500 ml-6">
+                            Purchased: {new Date(selectedLesson.package.purchasedAt).toLocaleDateString()}
+                          </div>
+                        </div>
+                      ) : selectedLesson.payment ? (
+                        <div className="mt-2 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-600">Covered by Payment:</span>
+                            <a
+                              href={`#payments`}
+                              onClick={(e) => {
+                                e.preventDefault()
+                                // Navigate to payments page
+                                window.location.href = '/payments'
+                              }}
+                              className="text-indigo-600 hover:text-indigo-900 font-medium"
+                            >
+                              ${selectedLesson.payment.amount.toFixed(2)} on {new Date(selectedLesson.payment.date).toLocaleDateString()}
+                            </a>
+                          </div>
+                          {selectedLesson.payment.method && (
+                            <div className="text-xs text-gray-500 ml-6">
+                              Method: {selectedLesson.payment.method.charAt(0).toUpperCase() + selectedLesson.payment.method.slice(1)}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          Payment information not available
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 pt-2 border-t">
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</h3>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        Unpaid
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Status */}
                 <div className="space-y-1.5 pt-2 border-t">
