@@ -6,9 +6,11 @@ import toast from 'react-hot-toast'
 export function Payments() {
   const [payments, setPayments] = useState([])
   const [students, setStudents] = useState([])
+  const [packages, setPackages] = useState([])
   const [selectedPayment, setSelectedPayment] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [showPackageModal, setShowPackageModal] = useState(false)
+  const [showPackagesList, setShowPackagesList] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
   const [filterStudentId, setFilterStudentId] = useState('')
@@ -33,6 +35,7 @@ export function Payments() {
   useEffect(() => {
     fetchPayments()
     fetchStudents()
+    fetchPackages()
   }, [])
 
   const fetchPayments = async () => {
@@ -46,12 +49,41 @@ export function Payments() {
 
   const fetchStudents = async () => {
     try {
-      const { data } = await api.get('/students')
-      setStudents(data)
+      // Fetch only active (non-archived) students
+      const { data } = await api.get('/students?includeArchived=false')
+      // Sort students alphabetically by first name, then last name
+      const sorted = data.sort((a, b) => {
+        const nameA = `${a.firstName} ${a.lastName}`.toLowerCase()
+        const nameB = `${b.firstName} ${b.lastName}`.toLowerCase()
+        return nameA.localeCompare(nameB)
+      })
+      setStudents(sorted)
     } catch (error) {
       toast.error('Failed to load students')
     }
   }
+
+  const fetchPackages = async () => {
+    try {
+      const { data } = await api.get('/packages')
+      setPackages(data)
+    } catch (error) {
+      toast.error('Failed to load packages')
+    }
+  }
+
+  const handleTogglePackageActive = async (pkg) => {
+    try {
+      await api.put(`/packages/${pkg.id}`, {
+        isActive: !pkg.isActive
+      })
+      toast.success(`Package ${pkg.isActive ? 'deactivated' : 'activated'}`)
+      await fetchPackages()
+    } catch (error) {
+      toast.error('Failed to update package')
+    }
+  }
+
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -215,6 +247,7 @@ export function Payments() {
 
       toast.success('Package created and payment recorded')
       await fetchPayments()
+      await fetchPackages()
       setShowPackageModal(false)
       resetPackageForm()
     } catch (error) {
@@ -254,6 +287,13 @@ export function Payments() {
               <p className="text-sm text-gray-500 mt-1">{payments.length} {payments.length === 1 ? 'payment' : 'payments'}</p>
             </div>
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowPackagesList(!showPackagesList)}
+                className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
+                title="View packages"
+              >
+                {showPackagesList ? 'Hide Packages' : 'Packages'}
+              </button>
               <button
                 onClick={() => { resetPackageForm(); setShowPackageModal(true); }}
                 className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
@@ -348,8 +388,111 @@ export function Payments() {
           </div>
         </div>
 
-        {/* Details Panel */}
-        <div className="bg-white rounded-lg shadow" style={{ height: '708px' }}>
+        {/* Packages List Panel - shown when showPackagesList is true */}
+        {showPackagesList && (
+          <div className="lg:col-span-2 bg-white rounded-lg shadow">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Packages</h2>
+                <p className="text-sm text-gray-500 mt-1">{packages.length} {packages.length === 1 ? 'package' : 'packages'}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {packages.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (window.confirm(`Are you sure you want to delete ALL ${packages.length} packages? This action cannot be undone.`)) {
+                        try {
+                          await api.delete('/packages/all')
+                          toast.success(`Deleted all ${packages.length} packages`)
+                          await fetchPackages()
+                        } catch (error) {
+                          toast.error(error.response?.data?.message || 'Failed to delete packages')
+                        }
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+                    title="Delete all packages"
+                  >
+                    Delete All
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowPackagesList(false)}
+                  className="p-1.5 rounded-md text-gray-600 hover:bg-gray-50 transition-colors"
+                  title="Close packages"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto max-h-[590px]">
+              {packages.length === 0 ? (
+                <div className="p-8 text-center text-gray-500 text-sm">No packages</div>
+              ) : (
+                <div className="divide-y divide-gray-200">
+                  {packages.map((pkg) => {
+                    const hoursRemaining = pkg.totalHours - pkg.hoursUsed
+                    const isFullyUsed = hoursRemaining <= 0
+                    const packageHourlyRate = pkg.price / pkg.totalHours
+                    return (
+                      <div 
+                        key={pkg.id} 
+                        className="p-4 hover:bg-gray-50"
+                      >
+                        <div className="flex justify-between items-start">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-sm font-semibold text-gray-900">{pkg.name}</h3>
+                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                pkg.isActive 
+                                  ? (isFullyUsed ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800')
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}>
+                                {pkg.isActive ? (isFullyUsed ? 'Used Up' : 'Active') : 'Inactive'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-600 mt-1">
+                              {pkg.student.firstName} {pkg.student.lastName}
+                            </p>
+                            <div className="mt-2 space-y-1">
+                              <p className="text-xs text-gray-600">
+                                <span className="font-medium">Hours:</span> {hoursRemaining.toFixed(2)} / {pkg.totalHours} remaining
+                              </p>
+                              <p className="text-xs text-gray-600">
+                                <span className="font-medium">Price:</span> ${pkg.price.toFixed(2)} 
+                                <span className="text-gray-500 ml-1">(${packageHourlyRate.toFixed(2)}/hour)</span>
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                Purchased: {new Date(pkg.purchasedAt).toLocaleDateString()}
+                                {pkg.expiresAt && ` • Expires: ${new Date(pkg.expiresAt).toLocaleDateString()}`}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <button
+                              onClick={() => handleTogglePackageActive(pkg)}
+                              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                                pkg.isActive
+                                  ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                  : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                              }`}
+                            >
+                              {pkg.isActive ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Details Panel - only show when packages list is not shown */}
+        {!showPackagesList && (
+          <div className="bg-white rounded-lg shadow" style={{ height: '708px' }}>
           {selectedPayment ? (
             <>
               <div className="p-4 border-b border-gray-200">
@@ -426,7 +569,8 @@ export function Payments() {
               Select a payment to view details
             </div>
           )}
-        </div>
+          </div>
+        )}
       </div>
 
       {showModal && (
@@ -630,7 +774,7 @@ export function Payments() {
                       <input
                         type="number"
                         min="0.01"
-                        step="0.25"
+                        step="any"
                         required
                         value={packageForm.totalHours}
                         onChange={(e) => setPackageForm({ ...packageForm, totalHours: e.target.value })}

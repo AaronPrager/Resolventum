@@ -14,7 +14,9 @@ export function Reports() {
   const [recentPayments, setRecentPayments] = useState([])
   const [allPayments, setAllPayments] = useState([])
   const [loading, setLoading] = useState(true)
-  const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'paymentHistory'|'monthlyTotals'|'schedule'|'attendance'|'cancellations'
+  const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'paymentHistory'|'monthlyTotals'|'schedule'|'attendance'|'cancellations'|'packages'
+  const [packagesReport, setPackagesReport] = useState({ packages: [], summary: {} })
+  const [packagesFilter, setPackagesFilter] = useState('active') // 'all', 'active', 'inactive'
   const [scheduleRange, setScheduleRange] = useState('week') // 'week' | 'month'
   const [scheduleLessons, setScheduleLessons] = useState([])
   const [attendanceLessons, setAttendanceLessons] = useState([])
@@ -292,6 +294,22 @@ export function Reports() {
                 className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'monthlyTotals' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
               >
                 Monthly Payment Totals
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={async () => {
+                  setActiveReport('packages')
+                  try {
+                    const { data } = await api.get('/reports/packages', { params: { status: packagesFilter } })
+                    setPackagesReport(data)
+                  } catch (error) {
+                    toast.error('Failed to load packages report')
+                  }
+                }}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'packages' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
+              >
+                Package Tracking
               </button>
             </li>
           </ul>
@@ -619,6 +637,162 @@ export function Reports() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </>
+          )}
+
+          {activeReport === 'packages' && (
+            <>
+              <div className="px-4 py-3 border-b border-gray-200 flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Package Tracking Report</h2>
+                  <p className="text-sm text-gray-500">Track all packages, their utilization, and status.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600">Filter:</label>
+                  <select
+                    value={packagesFilter}
+                    onChange={async (e) => {
+                      const newFilter = e.target.value
+                      setPackagesFilter(newFilter)
+                      try {
+                        const { data } = await api.get('/reports/packages', { params: { status: newFilter } })
+                        setPackagesReport(data)
+                      } catch (error) {
+                        toast.error('Failed to load packages report')
+                      }
+                    }}
+                    className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-0"
+                  >
+                    <option value="all">All Packages</option>
+                    <option value="active">Active Only</option>
+                    <option value="inactive">Inactive Only</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Summary Cards */}
+              {packagesReport.summary && Object.keys(packagesReport.summary).length > 0 && (
+                <div className="px-4 py-4 bg-gray-50 border-b border-gray-200">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Total Packages</p>
+                      <p className="text-lg font-semibold text-gray-900">{packagesReport.summary.totalPackages || 0}</p>
+                    </div>
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Active Packages</p>
+                      <p className="text-lg font-semibold text-green-700">{packagesReport.summary.activePackages || 0}</p>
+                    </div>
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Total Revenue</p>
+                      <p className="text-lg font-semibold text-gray-900">${(packagesReport.summary.totalPackageRevenue || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Avg Utilization</p>
+                      <p className="text-lg font-semibold text-gray-900">{(packagesReport.summary.averageUtilization || 0).toFixed(1)}%</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-4 mt-4">
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Hours Purchased</p>
+                      <p className="text-lg font-semibold text-gray-900">{(packagesReport.summary.totalHoursPurchased || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Hours Used</p>
+                      <p className="text-lg font-semibold text-indigo-700">{(packagesReport.summary.totalHoursUsed || 0).toFixed(2)}</p>
+                    </div>
+                    <div className="bg-white rounded-md p-3 border border-gray-200">
+                      <p className="text-xs text-gray-500">Hours Remaining</p>
+                      <p className="text-lg font-semibold text-green-700">{(packagesReport.summary.totalHoursRemaining || 0).toFixed(2)}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Packages Table */}
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Package</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hours</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Utilization</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price / Rate</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Purchased</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expires</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {packagesReport.packages.length === 0 ? (
+                      <tr>
+                        <td colSpan="8" className="px-6 py-4 text-center text-sm text-gray-500">No packages found</td>
+                      </tr>
+                    ) : (
+                      packagesReport.packages.map((pkg) => {
+                        const statusColors = {
+                          'Active': 'bg-green-100 text-green-800',
+                          'Used Up': 'bg-yellow-100 text-yellow-800',
+                          'Expired': 'bg-red-100 text-red-800',
+                          'Inactive': 'bg-gray-100 text-gray-800'
+                        }
+                        return (
+                          <tr key={pkg.id} className="hover:bg-gray-50">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-medium text-gray-900">{pkg.name}</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                {pkg.student.firstName} {pkg.student.lastName}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColors[pkg.status] || 'bg-gray-100 text-gray-800'}`}>
+                                {pkg.status}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">
+                                <span className="font-medium">{pkg.hoursRemaining.toFixed(2)}</span>
+                                <span className="text-gray-500"> / {pkg.totalHours.toFixed(2)}</span>
+                              </div>
+                              <div className="text-xs text-gray-500">Used: {pkg.hoursUsed.toFixed(2)}h</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="flex items-center">
+                                <div className="flex-1 bg-gray-200 rounded-full h-2 mr-2" style={{ minWidth: '60px' }}>
+                                  <div 
+                                    className={`h-2 rounded-full ${
+                                      pkg.utilizationPercent >= 100 ? 'bg-yellow-600' :
+                                      pkg.utilizationPercent >= 75 ? 'bg-orange-500' :
+                                      'bg-green-500'
+                                    }`}
+                                    style={{ width: `${Math.min(pkg.utilizationPercent, 100)}%` }}
+                                  ></div>
+                                </div>
+                                <span className="text-sm text-gray-900">{pkg.utilizationPercent.toFixed(1)}%</span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-gray-900">${pkg.price.toFixed(2)}</div>
+                              <div className="text-xs text-gray-500">${pkg.packageHourlyRate.toFixed(2)}/hr</div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {new Date(pkg.purchasedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {pkg.expiresAt 
+                                ? new Date(pkg.expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                                : 'No expiry'
+                              }
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </>
           )}

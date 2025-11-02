@@ -540,5 +540,90 @@ router.get('/monthly-student', async (req, res) => {
   }
 });
 
+// Package tracking report
+router.get('/packages', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { status } = req.query; // Optional filter: 'active', 'inactive', 'all' (default: 'all')
+
+    // Build where clause with optional status filter
+    const where = { userId };
+    
+    // Filter by status if provided
+    if (status === 'active') {
+      where.isActive = true;
+    } else if (status === 'inactive') {
+      where.isActive = false;
+    }
+    // If status is 'all' or not provided, show all packages
+
+    // Get all packages with student info
+    const packages = await prisma.package.findMany({
+      where,
+      include: {
+        student: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true
+          }
+        }
+      },
+      orderBy: { purchasedAt: 'desc' }
+    });
+
+    // Enrich packages with calculated fields
+    const enrichedPackages = packages.map(pkg => {
+      const hoursRemaining = pkg.totalHours - pkg.hoursUsed;
+      const packageHourlyRate = pkg.price / pkg.totalHours;
+      const utilizationPercent = pkg.totalHours > 0 ? (pkg.hoursUsed / pkg.totalHours) * 100 : 0;
+      const isExpired = pkg.expiresAt ? new Date(pkg.expiresAt) < new Date() : false;
+      const isFullyUsed = hoursRemaining <= 0;
+
+      return {
+        ...pkg,
+        hoursRemaining,
+        packageHourlyRate,
+        utilizationPercent,
+        isExpired,
+        isFullyUsed,
+        status: !pkg.isActive 
+          ? 'Inactive' 
+          : isFullyUsed 
+            ? 'Used Up' 
+            : isExpired 
+              ? 'Expired' 
+              : 'Active'
+      };
+    });
+
+    // Calculate summary statistics
+    const activePackages = enrichedPackages.filter(p => p.isActive && !p.isFullyUsed && !p.isExpired);
+    const totalHoursPurchased = enrichedPackages.reduce((sum, p) => sum + p.totalHours, 0);
+    const totalHoursUsed = enrichedPackages.reduce((sum, p) => sum + p.hoursUsed, 0);
+    const totalHoursRemaining = enrichedPackages.reduce((sum, p) => sum + p.hoursRemaining, 0);
+    const totalPackageRevenue = enrichedPackages.reduce((sum, p) => sum + p.price, 0);
+    const averageUtilization = enrichedPackages.length > 0 
+      ? enrichedPackages.reduce((sum, p) => sum + p.utilizationPercent, 0) / enrichedPackages.length 
+      : 0;
+
+    res.json({
+      packages: enrichedPackages,
+      summary: {
+        totalPackages: enrichedPackages.length,
+        activePackages: activePackages.length,
+        totalHoursPurchased,
+        totalHoursUsed,
+        totalHoursRemaining,
+        totalPackageRevenue,
+        averageUtilization
+      }
+    });
+  } catch (error) {
+    console.error('Packages report error:', error);
+    res.status(500).json({ message: 'Error fetching packages report' });
+  }
+});
+
 export default router;
 
