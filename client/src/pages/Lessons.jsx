@@ -3,6 +3,47 @@ import { api } from '../utils/api'
 import { Plus, Edit, Trash2, Clock, User, Calendar as CalendarIcon, MapPin, Video, DollarSign, FileText, ChevronUp, ChevronDown } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+// Custom 24-hour time picker component
+const TimePicker24 = ({ value, onChange, className = '' }) => {
+  // Parse HH:mm format
+  const [hours, minutes] = (value || '09:00').split(':').map(v => parseInt(v, 10))
+  
+  const handleHourChange = (e) => {
+    const newHour = parseInt(e.target.value, 10)
+    onChange(`${String(newHour).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`)
+  }
+  
+  const handleMinuteChange = (e) => {
+    const newMinute = parseInt(e.target.value, 10)
+    onChange(`${String(hours).padStart(2, '0')}:${String(newMinute).padStart(2, '0')}`)
+  }
+  
+  return (
+    <div className={`flex gap-1 ${className}`}>
+      <select
+        value={hours}
+        onChange={handleHourChange}
+        className="flex-1 text-sm border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1"
+      >
+        {Array.from({ length: 24 }, (_, i) => (
+          <option key={i} value={i}>{String(i).padStart(2, '0')}</option>
+        ))}
+      </select>
+      <span className="self-center text-gray-500">:</span>
+      <select
+        value={minutes}
+        onChange={handleMinuteChange}
+        className="flex-1 text-sm border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1"
+      >
+        {Array.from({ length: 12 }, (_, i) => {
+          const min = i * 5
+          return <option key={min} value={min}>{String(min).padStart(2, '0')}</option>
+        })}
+      </select>
+    </div>
+  )
+}
+
 export function Lessons() {
   const [lessons, setLessons] = useState([])
   const [sortedLessons, setSortedLessons] = useState([])
@@ -13,6 +54,8 @@ export function Lessons() {
   const [isEditing, setIsEditing] = useState(false)
   const [showRecurringOptions, setShowRecurringOptions] = useState(false)
   const [recurringAction, setRecurringAction] = useState(null)
+  const [endRepeatType, setEndRepeatType] = useState('date') // 'date', 'count', or 'schoolYear'
+  const [numberOfClasses, setNumberOfClasses] = useState(10)
   const [formData, setFormData] = useState(() => ({
     studentId: '',
     dateTime: '',
@@ -51,6 +94,14 @@ export function Lessons() {
     return `${year}-${month}-${day}T${hours}:${minutes}`
   }
 
+  const calculatePrice = (studentId, durationMinutes) => {
+    if (!studentId || !durationMinutes) return 0
+    const selectedStudent = students.find(s => s.id === studentId)
+    if (!selectedStudent || !selectedStudent.pricePerLesson) return 0
+    // pricePerLesson is now hourly rate, calculate: (hourlyRate * durationInMinutes) / 60
+    return (selectedStudent.pricePerLesson * durationMinutes) / 60
+  }
+
   const handleStudentChange = (studentId) => {
     const selectedStudent = students.find(s => s.id === studentId)
     if (selectedStudent) {
@@ -59,11 +110,17 @@ export function Lessons() {
         ? `${studentName} - ${selectedStudent.subject}` 
         : studentName
       
+      // Calculate price based on hourly rate and current duration
+      const durationMinutes = formData.endDateTime && formData.dateTime
+        ? Math.round((new Date(formData.endDateTime) - new Date(formData.dateTime)) / 60000)
+        : 60 // Default 60 minutes
+      const calculatedPrice = calculatePrice(studentId, durationMinutes)
+      
       setFormData({
         ...formData,
         studentId,
         subject: subjectText,
-        price: selectedStudent.pricePerLesson || formData.price
+        price: calculatedPrice
       })
     } else {
       setFormData({ ...formData, studentId, subject: '' })
@@ -253,10 +310,51 @@ export function Lessons() {
 
     if (formData.notes) submitData.notes = formData.notes
     if (formData.locationType === 'remote' && formData.link) submitData.link = formData.link
+    // Always send isRecurring so backend knows when to convert recurring to non-recurring
+    submitData.isRecurring = formData.isRecurring || false
     if (formData.isRecurring) {
-      submitData.isRecurring = true
       submitData.recurringFrequency = formData.recurringFrequency
-      submitData.recurringEndDate = new Date(formData.recurringEndDate).toISOString()
+      if (formData.recurringEndDate) {
+        // Set to end of day (23:59:59.999) to ensure inclusive end date
+        const endDate = new Date(formData.recurringEndDate)
+        endDate.setHours(23, 59, 59, 999)
+        submitData.recurringEndDate = endDate.toISOString()
+      } else if (endRepeatType === 'schoolYear') {
+        // Calculate end of school year if not already set
+        const now = new Date()
+        let year = now.getFullYear()
+        if (now.getMonth() > 5) year = year + 1
+        const schoolYearEnd = new Date(year, 5, 30)
+        submitData.recurringEndDate = schoolYearEnd.toISOString()
+      } else if (endRepeatType === 'count' && formData.dateTime && formData.recurringFrequency) {
+        // Calculate from number of classes - end date should be the date/time of the last lesson
+        const startDate = new Date(formData.dateTime)
+        const endDate = new Date(startDate)
+        const frequency = formData.recurringFrequency
+        // For N classes, we need (N-1) intervals after the first one
+        const occurrences = numberOfClasses - 1
+        switch (frequency) {
+          case 'daily':
+            endDate.setDate(endDate.getDate() + occurrences)
+            break
+          case 'weekly':
+            endDate.setDate(endDate.getDate() + (occurrences * 7))
+            break
+          case 'monthly':
+            endDate.setMonth(endDate.getMonth() + occurrences)
+            break
+          case 'yearly':
+            endDate.setFullYear(endDate.getFullYear() + occurrences)
+            break
+        }
+        // Set to end of day in local timezone to ensure inclusive end date
+        endDate.setHours(23, 59, 59, 999)
+        submitData.recurringEndDate = endDate.toISOString()
+      }
+    } else {
+      // Explicitly set to null when not recurring
+      submitData.recurringFrequency = null
+      submitData.recurringEndDate = null
     }
 
     try {
@@ -377,7 +475,7 @@ export function Lessons() {
     if (allDay) return 'All Day'
     const start = new Date(dateTime)
     const end = new Date(start.getTime() + duration * 60000)
-    return `${start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${end.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`
+    return `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}`
   }
 
   const formatDate = (dateTime) => {
@@ -721,37 +819,70 @@ export function Lessons() {
                     {/* Starts */}
                     <div className="flex items-center py-2">
                       <label className="w-24 text-sm text-gray-600">Starts</label>
-                      <input
-                        type={formData.allDay ? "date" : "datetime-local"}
-                        required
-                        value={formData.allDay ? formData.dateTime.split('T')[0] : formData.dateTime}
-                        onChange={(e) => {
-                          const newStart = formData.allDay ? `${e.target.value}T00:00` : e.target.value
-                          setFormData({
-                            ...formData,
-                            dateTime: newStart,
-                            endDateTime: formData.allDay ? `${e.target.value}T23:59` : getEndDateTime(newStart)
-                          })
-                        }}
-                        disabled={formData.allDay && !formData.dateTime}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
-                      />
+                      <div className="flex gap-2 flex-1">
+                        <input
+                          type="date"
+                          required
+                          value={formData.dateTime.split('T')[0] || ''}
+                          onChange={(e) => {
+                            const date = e.target.value
+                            const time = formData.dateTime.split('T')[1] || '09:00'
+                            const newStart = formData.allDay ? `${date}T00:00` : `${date}T${time}`
+                            setFormData({
+                              ...formData,
+                              dateTime: newStart,
+                              endDateTime: formData.allDay ? `${date}T23:59` : getEndDateTime(newStart)
+                            })
+                          }}
+                          disabled={formData.allDay && !formData.dateTime}
+                          className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                        />
+                        {!formData.allDay && (
+                          <TimePicker24
+                            value={formData.dateTime.split('T')[1] || '09:00'}
+                            onChange={(time) => {
+                              const date = formData.dateTime.split('T')[0] || new Date().toISOString().split('T')[0]
+                              const newStart = `${date}T${time}`
+                              setFormData({
+                                ...formData,
+                                dateTime: newStart,
+                                endDateTime: getEndDateTime(newStart)
+                              })
+                            }}
+                            className="flex-1"
+                          />
+                        )}
+                      </div>
                     </div>
 
                     {/* Ends */}
                     <div className="flex items-center py-2">
                       <label className="w-24 text-sm text-gray-600">Ends</label>
-                      <input
-                        type={formData.allDay ? "date" : "datetime-local"}
-                        required
-                        value={formData.allDay ? formData.endDateTime.split('T')[0] : formData.endDateTime}
-                        onChange={(e) => {
-                          const newEnd = formData.allDay ? `${e.target.value}T23:59` : e.target.value
-                          setFormData({ ...formData, endDateTime: newEnd })
-                        }}
-                        disabled={formData.allDay && !formData.endDateTime}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
-                      />
+                      <div className="flex gap-2 flex-1">
+                        <input
+                          type="date"
+                          required
+                          value={formData.endDateTime.split('T')[0] || ''}
+                          onChange={(e) => {
+                            const date = e.target.value
+                            const time = formData.endDateTime.split('T')[1] || '10:00'
+                            const newEnd = formData.allDay ? `${date}T23:59` : `${date}T${time}`
+                            setFormData({ ...formData, endDateTime: newEnd })
+                          }}
+                          disabled={formData.allDay && !formData.endDateTime}
+                          className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                        />
+                        {!formData.allDay && (
+                          <TimePicker24
+                            value={formData.endDateTime.split('T')[1] || '10:00'}
+                            onChange={(time) => {
+                              const date = formData.endDateTime.split('T')[0] || formData.dateTime.split('T')[0] || new Date().toISOString().split('T')[0]
+                              setFormData({ ...formData, endDateTime: `${date}T${time}` })
+                            }}
+                            className="flex-1"
+                          />
+                        )}
+                      </div>
                     </div>
 
                     {/* Location */}
@@ -790,8 +921,30 @@ export function Lessons() {
                           const value = e.target.value
                           if (value === 'never') {
                             setFormData({ ...formData, isRecurring: false, recurringFrequency: 'weekly', recurringEndDate: '' })
+                            setEndRepeatType('date')
                           } else {
                             setFormData({ ...formData, isRecurring: true, recurringFrequency: value })
+                            // If switching to count mode, recalculate end date
+                            if (endRepeatType === 'count' && formData.dateTime) {
+                              const startDate = new Date(formData.dateTime)
+                              let endDate = new Date(startDate)
+                              const occurrences = numberOfClasses - 1
+                              switch (value) {
+                                case 'daily':
+                                  endDate.setDate(endDate.getDate() + occurrences)
+                                  break
+                                case 'weekly':
+                                  endDate.setDate(endDate.getDate() + (occurrences * 7))
+                                  break
+                                case 'monthly':
+                                  endDate.setMonth(endDate.getMonth() + occurrences)
+                                  break
+                                case 'yearly':
+                                  endDate.setFullYear(endDate.getFullYear() + occurrences)
+                                  break
+                              }
+                              setFormData(prev => ({ ...prev, isRecurring: true, recurringFrequency: value, recurringEndDate: endDate.toISOString().split('T')[0] }))
+                            }
                           }
                         }}
                         className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
@@ -806,15 +959,92 @@ export function Lessons() {
 
                     {/* End Repeat */}
                     {formData.isRecurring && (
-                      <div className="flex items-center py-2">
-                        <label className="w-24 text-sm text-gray-600">End Repeat</label>
-                        <input
-                          type="date"
-                          required
-                          value={formData.recurringEndDate}
-                          onChange={(e) => setFormData({ ...formData, recurringEndDate: e.target.value })}
-                          className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
-                        />
+                      <div className="flex items-start py-2">
+                        <label className="w-24 text-sm text-gray-600 pt-2">End Repeat</label>
+                        <div className="flex-1 space-y-2">
+                          <select
+                            value={endRepeatType}
+                            onChange={(e) => {
+                              setEndRepeatType(e.target.value)
+                              if (e.target.value === 'date') {
+                                // Keep current date if set
+                              } else if (e.target.value === 'count') {
+                                setFormData({ ...formData, recurringEndDate: '' })
+                              } else if (e.target.value === 'schoolYear') {
+                                // Calculate end of school year (June 30)
+                                const now = new Date()
+                                let year = now.getFullYear()
+                                if (now.getMonth() > 5) {
+                                  year = year + 1
+                                }
+                                const schoolYearEnd = new Date(year, 5, 30)
+                                setFormData({ ...formData, recurringEndDate: schoolYearEnd.toISOString().split('T')[0] })
+                              }
+                            }}
+                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                          >
+                            <option value="date">Until (date)</option>
+                            <option value="count">Number of classes</option>
+                            <option value="schoolYear">Till end of school year</option>
+                          </select>
+                          {endRepeatType === 'date' && (
+                            <input
+                              type="date"
+                              required
+                              value={formData.recurringEndDate || ''}
+                              onChange={(e) => setFormData({ ...formData, recurringEndDate: e.target.value })}
+                              className="w-full border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                            />
+                          )}
+                          {endRepeatType === 'count' && (
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="number"
+                                min="1"
+                                value={numberOfClasses}
+                                onChange={(e) => {
+                                  const count = parseInt(e.target.value) || 1
+                                  setNumberOfClasses(count)
+                                  // Calculate end date based on frequency and count
+                                  if (formData.dateTime && formData.recurringFrequency) {
+                                    const startDate = new Date(formData.dateTime)
+                                    const endDate = new Date(startDate)
+                                    const frequency = formData.recurringFrequency
+                                    const occurrences = count - 1
+                                    switch (frequency) {
+                                      case 'daily':
+                                        endDate.setDate(endDate.getDate() + occurrences)
+                                        break
+                                      case 'weekly':
+                                        endDate.setDate(endDate.getDate() + (occurrences * 7))
+                                        break
+                                      case 'monthly':
+                                        endDate.setMonth(endDate.getMonth() + occurrences)
+                                        break
+                                      case 'yearly':
+                                        endDate.setFullYear(endDate.getFullYear() + occurrences)
+                                        break
+                                    }
+                                    setFormData({ ...formData, recurringEndDate: endDate.toISOString().split('T')[0] })
+                                  }
+                                }}
+                                className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                                placeholder="Number of classes"
+                              />
+                              <span className="text-xs text-gray-500">classes</span>
+                            </div>
+                          )}
+                          {endRepeatType === 'schoolYear' && (
+                            <div className="text-xs text-gray-500 px-2">
+                              Until June 30, {(() => {
+                                const now = new Date()
+                                let year = now.getFullYear()
+                                if (now.getMonth() > 5) year = year + 1
+                                return year
+                              })()}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
 

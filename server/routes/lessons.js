@@ -7,14 +7,47 @@ import { v4 as uuidv4 } from 'uuid';
 const router = express.Router();
 
 // Helper function to calculate recurring lesson dates
+// endDate should be inclusive - lessons are created up to and including the end date
+// All dates are handled in local timezone
 function calculateRecurringDates(startDate, frequency, endDate) {
   const dates = [];
   let currentDate = new Date(startDate);
-  const end = new Date(endDate);
+  let end = new Date(endDate);
   
-  while (currentDate <= end) {
-    dates.push(new Date(currentDate));
+  // Extract the date components from the end date (ignore time component)
+  // This ensures we compare dates correctly regardless of timezone
+  const endYear = end.getUTCFullYear();
+  const endMonth = end.getUTCMonth();
+  const endDay = end.getUTCDate();
+  
+  // Create a proper end date at end of day in UTC, then convert to local
+  // This ensures Nov 13 means Nov 13, not Nov 12
+  end = new Date(Date.UTC(endYear, endMonth, endDay, 23, 59, 59, 999));
+  
+  // Helper to get date-only string for comparison (YYYY-MM-DD)
+  const getDateOnly = (date) => {
+    return date.toISOString().split('T')[0];
+  };
+  
+  // Helper to compare dates by date only (ignoring time)
+  const compareDatesOnly = (date1, date2) => {
+    const d1Str = getDateOnly(date1);
+    const d2Str = getDateOnly(date2);
+    return d1Str <= d2Str;
+  };
+  
+  // Debug: log what we're working with
+  console.log('[calculateRecurringDates] Start:', currentDate.toISOString(), 'End:', end.toISOString(), 'Frequency:', frequency);
+  console.log('[calculateRecurringDates] Start date only:', getDateOnly(currentDate), 'End date only:', getDateOnly(end));
+  
+  // Add dates until we exceed the end date
+  // Use date-only comparison to avoid time-related issues
+  while (compareDatesOnly(currentDate, end)) {
+    const dateToAdd = new Date(currentDate);
+    dates.push(dateToAdd);
+    console.log('[calculateRecurringDates] Added:', getDateOnly(dateToAdd));
     
+    // Increment to next occurrence
     switch (frequency) {
       case 'daily':
         currentDate.setDate(currentDate.getDate() + 1);
@@ -31,8 +64,11 @@ function calculateRecurringDates(startDate, frequency, endDate) {
       default:
         return dates;
     }
+    
+    console.log('[calculateRecurringDates] Next will be:', getDateOnly(currentDate), 'vs End:', getDateOnly(end), 'Continue?', compareDatesOnly(currentDate, end));
   }
   
+  console.log('[calculateRecurringDates] Total dates generated:', dates.length, 'Dates:', dates.map(d => getDateOnly(d)));
   return dates;
 }
 
@@ -145,10 +181,21 @@ router.post(
         return res.status(404).json({ message: 'Student not found' });
       }
 
+      // Calculate price based on student's hourly rate and lesson duration
+      // pricePerLesson is now treated as price per hour
+      // price = (hourlyRate * durationInMinutes) / 60
+      const hourlyRate = student.pricePerLesson || 0;
+      const calculatedPrice = (hourlyRate * duration) / 60;
+      // Use calculated price if student has hourly rate, otherwise use provided price
+      const finalPrice = hourlyRate > 0 ? calculatedPrice : (price || 0);
+
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
         const recurringGroupId = uuidv4();
-        const dates = calculateRecurringDates(dateTime, recurringFrequency, recurringEndDate);
+        // Frontend sends end date with time set to end of day
+        // calculateRecurringDates will normalize it to ensure inclusivity
+        const endDateWithTime = new Date(recurringEndDate);
+        const dates = calculateRecurringDates(dateTime, recurringFrequency, endDateWithTime);
         
         const lessonsData = dates.map(date => ({
           userId: req.user.id,
@@ -156,7 +203,7 @@ router.post(
           dateTime: date,
           duration,
           subject,
-          price,
+          price: finalPrice,
           notes: notes || null,
           status: resolveStatus(date),
           locationType: locationType || 'in-person',
@@ -173,29 +220,36 @@ router.post(
           data: lessonsData
         });
 
-        // Deduct packages: consume up to lessons.count from student's active packages
+        // Deduct packages: consume hours from student's active packages based on lesson durations
         try {
-          let remainingToConsume = lessons.count;
-          if (remainingToConsume > 0) {
+          // Calculate total hours needed for all lessons
+          let remainingHours = 0;
+          lessonsData.forEach(lesson => {
+            remainingHours += lesson.duration / 60; // Convert minutes to hours
+          });
+          
+          if (remainingHours > 0) {
             // Get student's active packages ordered by purchasedAt
             const pkgs = await prisma.package.findMany({
               where: {
                 userId: req.user.id,
                 studentId,
+                isActive: true,
                 OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
               },
               orderBy: { purchasedAt: 'asc' }
             });
+            
             for (const pkg of pkgs) {
-              const available = (pkg.totalLessons || 0) - (pkg.lessonsUsed || 0);
+              const available = (pkg.totalHours || 0) - (pkg.hoursUsed || 0);
               if (available <= 0) continue;
-              const consume = Math.min(available, remainingToConsume);
+              const consume = Math.min(available, remainingHours);
               await prisma.package.update({
                 where: { id: pkg.id },
-                data: { lessonsUsed: { increment: consume } }
+                data: { hoursUsed: { increment: consume } }
               });
-              remainingToConsume -= consume;
-              if (remainingToConsume <= 0) break;
+              remainingHours -= consume;
+              if (remainingHours <= 0) break;
             }
           }
         } catch (e) {
@@ -215,7 +269,7 @@ router.post(
           dateTime: new Date(dateTime),
           duration,
           subject,
-          price,
+          price: finalPrice,
           notes: notes || null,
           status: resolveStatus(dateTime),
           locationType: locationType || 'in-person',
@@ -235,20 +289,26 @@ router.post(
           }
         });
 
-        // Deduct from student's active package (one lesson)
+        // Deduct from student's active package based on lesson duration (in hours)
         try {
           const pkg = await prisma.package.findFirst({
             where: {
               userId: req.user.id,
               studentId,
+              isActive: true,
               OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
             },
             orderBy: { purchasedAt: 'asc' }
           });
-          if (pkg && (pkg.totalLessons || 0) > (pkg.lessonsUsed || 0)) {
+          
+          if (pkg && pkg.totalHours > pkg.hoursUsed) {
+            const lessonHours = duration / 60; // Convert minutes to hours
+            const availableHours = pkg.totalHours - pkg.hoursUsed;
+            const hoursToDeduct = Math.min(lessonHours, availableHours);
+            
             await prisma.package.update({
               where: { id: pkg.id },
-              data: { lessonsUsed: { increment: 1 } }
+              data: { hoursUsed: { increment: hoursToDeduct } }
             });
           }
         } catch (e) {
@@ -285,32 +345,57 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Lesson not found' });
     }
 
-    // If studentId is being changed, verify new student belongs to user
-    if (studentId && studentId !== currentLesson.studentId) {
-      const student = await prisma.student.findFirst({
-        where: { id: studentId, userId: req.user.id }
-      });
-      if (!student) {
-        return res.status(404).json({ message: 'Student not found' });
-      }
+    // Get the student (either current or new if being changed)
+    const finalStudentId = studentId || currentLesson.studentId;
+    const student = await prisma.student.findFirst({
+      where: { id: finalStudentId, userId: req.user.id },
+      include: {} // We'll fetch it to get pricePerLesson
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
     }
 
+    // Validate dateTime is provided
+    if (!dateTime) {
+      return res.status(400).json({ message: 'dateTime is required' });
+    }
+
+    // Calculate price based on student's hourly rate and lesson duration
+    // pricePerLesson is treated as price per hour
+    const finalDuration = duration ? parseInt(duration) : currentLesson.duration;
+    const hourlyRate = student.pricePerLesson || 0;
+    let calculatedPrice = hourlyRate > 0 ? (hourlyRate * finalDuration) / 60 : (price !== undefined ? parseFloat(price) : currentLesson.price);
+
     const updateData = {
-      studentId,
+      studentId: finalStudentId,
       dateTime: new Date(dateTime),
-      duration: parseInt(duration),
-      subject,
-      price: parseFloat(price),
-      notes: notes || null,
-      status: status || 'scheduled',
-      locationType: locationType || 'in-person',
-      link: link || null,
+      duration: finalDuration,
+      subject: subject !== undefined ? subject : currentLesson.subject,
+      price: calculatedPrice,
+      notes: notes !== undefined ? (notes || null) : currentLesson.notes,
+      status: status || currentLesson.status || 'scheduled',
+      locationType: locationType || currentLesson.locationType || 'in-person',
+      link: link !== undefined ? (link || null) : currentLesson.link,
       // iCal-style options
       allDay: allDay !== undefined ? allDay : currentLesson.allDay
     };
 
     // Check if converting recurring to single
     if (!isRecurring && currentLesson.isRecurring) {
+      // Delete all future lessons in this recurring group (keep only the current one)
+      if (currentLesson.recurringGroupId) {
+        await prisma.lesson.deleteMany({
+          where: {
+            recurringGroupId: currentLesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gt: currentLesson.dateTime
+            }
+          }
+        });
+      }
+
       // Convert recurring lesson to single
       updateData.isRecurring = false;
       updateData.recurringFrequency = null;
@@ -327,7 +412,7 @@ router.put('/:id', async (req, res) => {
 
       res.json({
         ...lesson,
-        message: 'Converted to single lesson'
+        message: 'Converted to single lesson and deleted all future occurrences'
       });
     }
     // Check if converting single to recurring series
@@ -336,6 +421,8 @@ router.put('/:id', async (req, res) => {
       const recurringGroupId = uuidv4();
       const startDate = new Date(dateTime);
       const endDate = new Date(recurringEndDate);
+      // Ensure end date is inclusive (end of day)
+      endDate.setHours(23, 59, 59, 999);
 
       // Calculate future dates starting after the current lesson
       const nextDate = new Date(startDate);
@@ -370,21 +457,22 @@ router.put('/:id', async (req, res) => {
       // Create future recurring lessons
       if (futureDates.length > 0) {
         const futureLessons = futureDates.map(date => ({
-          studentId: updateData.studentId,
+          userId: req.user.id,
+          studentId: updateData.studentId || currentLesson.studentId,
           dateTime: date,
-          duration: updateData.duration,
-          subject: updateData.subject,
-          price: updateData.price,
-          notes: updateData.notes,
-          status: updateData.status,
-          locationType: updateData.locationType,
-          link: updateData.link,
+          duration: updateData.duration || currentLesson.duration,
+          subject: updateData.subject || currentLesson.subject,
+          price: updateData.price || currentLesson.price,
+          notes: updateData.notes || currentLesson.notes,
+          status: updateData.status || currentLesson.status || 'scheduled',
+          locationType: updateData.locationType || currentLesson.locationType || 'in-person',
+          link: updateData.link || currentLesson.link,
           isRecurring: true,
           recurringFrequency,
           recurringEndDate: endDate,
           recurringGroupId,
           // iCal-style options
-          allDay: updateData.allDay
+          allDay: updateData.allDay !== undefined ? updateData.allDay : (currentLesson.allDay || false)
         }));
 
         await prisma.lesson.createMany({
@@ -401,8 +489,31 @@ router.put('/:id', async (req, res) => {
         ...updatedLesson,
         message: `Converted to recurring series with ${futureDates.length + 1} total lessons`
       });
-    } else {
-      // Regular update
+    }
+    // Check if updating existing recurring lesson
+    // NOTE: PUT /:id is for SINGLE instance updates only - it should NEVER recreate the series or affect other lessons
+    // For "this and future" updates or frequency changes, use PUT /:id/recurring-future instead
+    else if (isRecurring && currentLesson.isRecurring) {
+      // Single instance update - only update this one lesson, never touch other lessons in the series
+      // For single updates, preserve the existing recurring metadata (don't allow changing frequency/endDate that would affect series)
+      updateData.isRecurring = true;
+      // Keep existing frequency and end date - don't allow changing these for single instance updates
+      updateData.recurringFrequency = currentLesson.recurringFrequency;
+      updateData.recurringEndDate = currentLesson.recurringEndDate;
+      updateData.recurringGroupId = currentLesson.recurringGroupId;
+
+      const lesson = await prisma.lesson.update({
+        where: { id: req.params.id },
+        data: updateData,
+        include: {
+          student: true
+        }
+      });
+
+      res.json(lesson);
+    }
+    else {
+      // Regular update (single lesson or converting to single)
       updateData.isRecurring = false;
       updateData.recurringFrequency = null;
       updateData.recurringEndDate = null;
@@ -441,22 +552,182 @@ router.put('/:id/recurring-future', async (req, res) => {
 
     const { 
       studentId, dateTime, duration, subject, price, notes, status,
-      locationType, link, recurringFrequency, recurringEndDate,
+      locationType, link, isRecurring, recurringFrequency, recurringEndDate,
       allDay
     } = req.body;
 
+    // Prepare updateData first (needed for series recreation check)
     const updateData = {
-      studentId,
-      duration: parseInt(duration),
-      subject,
-      price: parseFloat(price),
-      notes: notes || null,
-      status: status || 'scheduled',
-      locationType: locationType || 'in-person',
-      link: link || null,
+      studentId: studentId || lesson.studentId,
+      dateTime: dateTime ? new Date(dateTime) : lesson.dateTime,
+      duration: duration ? parseInt(duration) : lesson.duration,
+      subject: subject !== undefined ? subject : lesson.subject,
+      price: price !== undefined ? parseFloat(price) : lesson.price,
+      notes: notes !== undefined ? (notes || null) : lesson.notes,
+      status: status || lesson.status || 'scheduled',
+      locationType: locationType || lesson.locationType || 'in-person',
+      link: link !== undefined ? (link || null) : lesson.link,
       // iCal-style options
       allDay: allDay !== undefined ? allDay : lesson.allDay
     };
+
+    // Check if dateTime is changing
+    const dateTimeChanged = dateTime && new Date(dateTime).getTime() !== new Date(lesson.dateTime).getTime();
+    
+    // Check if this is the first lesson in the recurring series
+    const allLessonsInSeries = await prisma.lesson.findMany({
+      where: {
+        recurringGroupId: lesson.recurringGroupId,
+        userId: req.user.id
+      },
+      orderBy: {
+        dateTime: 'asc'
+      }
+    });
+
+    const isFirstLesson = allLessonsInSeries.length > 0 && allLessonsInSeries[0].id === lesson.id;
+    
+    // If first lesson and date changed (not just time), recreate entire series
+    if (dateTimeChanged && isFirstLesson) {
+      const newDateTime = new Date(dateTime);
+      const oldDateTime = new Date(lesson.dateTime);
+      
+      // Check if same date (YYYY-MM-DD) but different time
+      const newDateStr = `${newDateTime.getFullYear()}-${newDateTime.getMonth()}-${newDateTime.getDate()}`;
+      const oldDateStr = `${oldDateTime.getFullYear()}-${oldDateTime.getMonth()}-${oldDateTime.getDate()}`;
+      
+      const onlyTimeChanged = newDateStr === oldDateStr;
+      
+      if (!onlyTimeChanged) {
+        // Date changed - recreate entire series with new start date
+        const newStartDate = new Date(dateTime);
+        const endDate = recurringEndDate ? new Date(recurringEndDate) : lesson.recurringEndDate;
+        // Ensure end date is inclusive (end of day)
+        if (endDate) {
+          endDate.setHours(23, 59, 59, 999);
+        }
+        const frequency = recurringFrequency || lesson.recurringFrequency;
+
+        if (endDate && frequency) {
+          // Delete all lessons in the series
+          await prisma.lesson.deleteMany({
+            where: {
+              recurringGroupId: lesson.recurringGroupId,
+              userId: req.user.id
+            }
+          });
+
+          // Recreate the entire series starting from the new date
+          const recurringGroupId = lesson.recurringGroupId || uuidv4();
+          const dates = calculateRecurringDates(newStartDate, frequency, endDate);
+
+          const lessonsData = dates.map((date) => ({
+            userId: req.user.id,
+            studentId: updateData.studentId || lesson.studentId,
+            dateTime: date,
+            duration: updateData.duration || lesson.duration,
+            subject: updateData.subject !== undefined ? updateData.subject : lesson.subject,
+            price: updateData.price !== undefined ? updateData.price : lesson.price,
+            notes: updateData.notes !== undefined ? (updateData.notes || null) : lesson.notes,
+            status: updateData.status || lesson.status || 'scheduled',
+            locationType: updateData.locationType || lesson.locationType || 'in-person',
+            link: updateData.link !== undefined ? (updateData.link || null) : lesson.link,
+            isRecurring: true,
+            recurringFrequency: frequency,
+            recurringEndDate: endDate,
+            recurringGroupId,
+            allDay: updateData.allDay !== undefined ? updateData.allDay : (lesson.allDay || false)
+          }));
+
+          await prisma.lesson.createMany({
+            data: lessonsData
+          });
+
+          // Get the first lesson (which replaces the current one)
+          const newFirstLesson = await prisma.lesson.findFirst({
+            where: {
+              recurringGroupId,
+              userId: req.user.id
+            },
+            orderBy: {
+              dateTime: 'asc'
+            },
+            include: {
+              student: true
+            }
+          });
+
+          return res.json({
+            ...newFirstLesson,
+            message: `Recurring series recreated with ${dates.length} lessons starting from new date`
+          });
+        }
+      }
+    }
+    
+    // Check if only the time changed (same date, different time) vs date changed
+    // This check applies to all lessons, not just non-first lessons
+    let onlyTimeChanged = false;
+    let timeDifference = null;
+    if (dateTimeChanged && dateTime) {
+      const newDateTime = new Date(dateTime);
+      const oldDateTime = new Date(lesson.dateTime);
+      
+      // Check if same date (YYYY-MM-DD) but different time
+      const newDateStr = `${newDateTime.getFullYear()}-${newDateTime.getMonth()}-${newDateTime.getDate()}`;
+      const oldDateStr = `${oldDateTime.getFullYear()}-${oldDateTime.getMonth()}-${oldDateTime.getDate()}`;
+      
+      if (newDateStr === oldDateStr) {
+        // Only time changed - calculate the time difference
+        onlyTimeChanged = true;
+        timeDifference = newDateTime.getTime() - oldDateTime.getTime();
+        console.log('[recurring-future] Only time changed. Time difference (ms):', timeDifference);
+      }
+    }
+    
+    console.log('[recurring-future] dateTimeChanged:', dateTimeChanged, 'onlyTimeChanged:', onlyTimeChanged, 'timeDifference:', timeDifference);
+
+    // Check if converting recurring to non-recurring
+    if (isRecurring === false && lesson.isRecurring) {
+      // Delete all future lessons in this recurring group (keep only the current one)
+      await prisma.lesson.deleteMany({
+        where: {
+          recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
+          dateTime: {
+            gt: lesson.dateTime
+          }
+        }
+      });
+
+      // Convert current and all remaining lessons in the series to single lessons
+      await prisma.lesson.updateMany({
+        where: {
+          recurringGroupId: lesson.recurringGroupId,
+          userId: req.user.id,
+          dateTime: {
+            gte: lesson.dateTime
+          }
+        },
+        data: {
+          ...updateData,
+          isRecurring: false,
+          recurringFrequency: null,
+          recurringEndDate: null,
+          recurringGroupId: null
+        }
+      });
+
+      const updatedLesson = await prisma.lesson.findUnique({
+        where: { id: lesson.id },
+        include: { student: true }
+      });
+
+      return res.json({
+        ...updatedLesson,
+        message: 'Converted to single lesson and deleted all future occurrences'
+      });
+    }
 
     // Check if frequency is being changed
     if (recurringFrequency && recurringFrequency !== lesson.recurringFrequency) {
@@ -472,12 +743,19 @@ router.put('/:id/recurring-future', async (req, res) => {
       });
 
       // Determine the end date
-      const endDate = recurringEndDate ? new Date(recurringEndDate) : 
-                      lesson.recurringEndDate ? new Date(lesson.recurringEndDate) : null;
+      let endDate = recurringEndDate ? new Date(recurringEndDate) : 
+                    lesson.recurringEndDate ? new Date(lesson.recurringEndDate) : null;
+      // Ensure end date is inclusive (end of day)
+      if (endDate) {
+        endDate.setHours(23, 59, 59, 999);
+      }
+      
+      // Use the new dateTime (which may have an updated time) for calculating future dates
+      const startDateTime = dateTime ? new Date(dateTime) : new Date(lesson.dateTime);
       
       if (endDate) {
-        // Generate new dates with the new frequency
-        const newDates = calculateRecurringDates(new Date(lesson.dateTime), recurringFrequency, endDate);
+        // Generate new dates with the new frequency starting from the updated dateTime
+        const newDates = calculateRecurringDates(startDateTime, recurringFrequency, endDate);
         
         // Create new lessons with the new frequency (skip first date as it's the current lesson)
         if (newDates.length > 1) {
@@ -506,15 +784,40 @@ router.put('/:id/recurring-future', async (req, res) => {
         }
       }
       
-      // Update the current lesson with new frequency and other data
+      // Update the current lesson with new frequency and other data (including dateTime if changed)
       await prisma.lesson.update({
         where: { id: lesson.id },
         data: {
           ...updateData,
+          dateTime: updateData.dateTime, // Include dateTime update - will be used as new start for series
           recurringFrequency: recurringFrequency,
           recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : lesson.recurringEndDate
         }
       });
+      
+      // If only time changed (not date), update time for all newly created lessons too
+      if (onlyTimeChanged && timeDifference !== null) {
+        // The new lessons were created starting from the updated dateTime, so they should already have the new time
+        // But we need to ensure any existing lessons in the series (if frequency didn't change dates) also get updated
+        const allLessonsInSeries = await prisma.lesson.findMany({
+          where: {
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gt: updateData.dateTime // Get lessons after the current one
+            }
+          }
+        });
+
+        // Update each existing lesson's time by adding the time difference
+        for (const lessonInSeries of allLessonsInSeries) {
+          const newDateTime = new Date(lessonInSeries.dateTime.getTime() + timeDifference);
+          await prisma.lesson.update({
+            where: { id: lessonInSeries.id },
+            data: { dateTime: newDateTime }
+          });
+        }
+      }
       
       const totalCount = await prisma.lesson.count({
         where: {
@@ -532,25 +835,90 @@ router.put('/:id/recurring-future', async (req, res) => {
       });
     }
 
-    // If recurringEndDate is provided (without frequency change), handle extending or shortening the series
-    if (recurringEndDate) {
+    // If recurringEndDate is provided AND it's different from the current one
+    const endDateChanged = recurringEndDate && (
+      !lesson.recurringEndDate || 
+      new Date(recurringEndDate).getTime() !== new Date(lesson.recurringEndDate).getTime()
+    );
+    
+    if (endDateChanged) {
       const newEndDate = new Date(recurringEndDate);
-      const currentEndDate = lesson.recurringEndDate;
+      // Ensure end date is inclusive (end of day)
+      newEndDate.setHours(23, 59, 59, 999);
+      const currentEndDate = lesson.recurringEndDate ? new Date(lesson.recurringEndDate) : null;
+      if (currentEndDate) {
+        currentEndDate.setHours(23, 59, 59, 999);
+      }
 
       // Update recurring end date for all lessons in the group
       updateData.recurringEndDate = newEndDate;
 
       // Update all lessons in the same recurring group that are on or after this lesson's date
-      await prisma.lesson.updateMany({
-        where: {
-          recurringGroupId: lesson.recurringGroupId,
-          userId: req.user.id,
-          dateTime: {
-            gte: lesson.dateTime
+      const { dateTime, ...updateDataWithoutDate } = updateData;
+      
+      if (onlyTimeChanged && timeDifference !== null) {
+        // Only time changed - update time for all lessons in series while preserving their dates
+        const allLessonsInSeries = await prisma.lesson.findMany({
+          where: {
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gte: lesson.dateTime
+            }
           }
-        },
-        data: updateData
-      });
+        });
+
+        // Update each lesson's time by adding the time difference
+        // Also recalculate price based on each lesson's duration
+        for (const lessonInSeries of allLessonsInSeries) {
+          const newDateTime = new Date(lessonInSeries.dateTime.getTime() + timeDifference);
+          const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
+          const hourlyRate = student.pricePerLesson || 0;
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          
+          await prisma.lesson.update({
+            where: { id: lessonInSeries.id },
+            data: { 
+              ...updateDataWithoutDate,
+              dateTime: newDateTime,
+              recurringEndDate: newEndDate,
+              price: recalculatedPrice,
+              duration: lessonDuration
+            }
+          });
+        }
+      } else {
+        // Date changed or no dateTime change - update fields but preserve individual dates
+        // Get all lessons to recalculate price based on each lesson's duration
+        const allLessonsInSeries = await prisma.lesson.findMany({
+          where: {
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gte: lesson.dateTime
+            }
+          }
+        });
+
+        // Update each lesson individually to recalculate price based on its duration
+        for (const lessonInSeries of allLessonsInSeries) {
+          const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
+          const hourlyRate = student.pricePerLesson || 0;
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          
+          await prisma.lesson.update({
+            where: { id: lessonInSeries.id },
+            data: {
+              ...updateDataWithoutDate,
+              price: recalculatedPrice,
+              duration: lessonDuration,
+              recurringEndDate: newEndDate,
+              // Update dateTime separately if it changed (and wasn't just time)
+              ...(dateTimeChanged && !onlyTimeChanged && lessonInSeries.id === lesson.id ? { dateTime: updateData.dateTime } : {})
+            }
+          });
+        }
+      }
 
       // If extending the series, create new lessons
       if (newEndDate > currentEndDate) {
@@ -635,21 +1003,83 @@ router.put('/:id/recurring-future', async (req, res) => {
       });
     } else {
       // No end date change, just update existing lessons
-      const result = await prisma.lesson.updateMany({
-        where: {
-          recurringGroupId: lesson.recurringGroupId,
-          userId: req.user.id,
-          dateTime: {
-            gte: lesson.dateTime
+      const { dateTime, ...updateDataWithoutDate } = updateData;
+      
+      if (onlyTimeChanged && timeDifference !== null) {
+        // Only time changed - update time for all lessons in series while preserving their dates
+        // Get all lessons in the series (including current one)
+        const allLessonsInSeries = await prisma.lesson.findMany({
+          where: {
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gte: lesson.dateTime
+            }
           }
-        },
-        data: updateData
-      });
+        });
 
-      res.json({ 
-        message: `${result.count} lessons updated successfully`,
-        count: result.count
-      });
+        console.log('[recurring-future] Found', allLessonsInSeries.length, 'lessons to update with new time');
+
+        // Update each lesson's time by adding the time difference
+        // Also recalculate price based on each lesson's duration
+        for (const lessonInSeries of allLessonsInSeries) {
+          const newDateTime = new Date(lessonInSeries.dateTime.getTime() + timeDifference);
+          console.log('[recurring-future] Updating lesson', lessonInSeries.id, 'from', lessonInSeries.dateTime.toISOString(), 'to', newDateTime.toISOString());
+          const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
+          const hourlyRate = student.pricePerLesson || 0;
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          
+          await prisma.lesson.update({
+            where: { id: lessonInSeries.id },
+            data: { 
+              ...updateDataWithoutDate,
+              dateTime: newDateTime,
+              price: recalculatedPrice,
+              duration: lessonDuration
+            }
+          });
+        }
+
+        res.json({ 
+          message: `${allLessonsInSeries.length} lessons updated with new time`,
+          count: allLessonsInSeries.length
+        });
+      } else {
+        // Date changed or no dateTime change - update fields but preserve individual dates
+        // Get all lessons to recalculate price based on each lesson's duration
+        const allLessonsInSeries = await prisma.lesson.findMany({
+          where: {
+            recurringGroupId: lesson.recurringGroupId,
+            userId: req.user.id,
+            dateTime: {
+              gte: lesson.dateTime
+            }
+          }
+        });
+
+        // Update each lesson individually to recalculate price based on its duration
+        for (const lessonInSeries of allLessonsInSeries) {
+          const lessonDuration = updateData.duration !== undefined ? updateData.duration : lessonInSeries.duration;
+          const hourlyRate = student.pricePerLesson || 0;
+          const recalculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonDuration) / 60 : (updateData.price !== undefined ? updateData.price : lessonInSeries.price);
+          
+          await prisma.lesson.update({
+            where: { id: lessonInSeries.id },
+            data: {
+              ...updateDataWithoutDate,
+              price: recalculatedPrice,
+              duration: lessonDuration,
+              // Update dateTime separately if it changed (and wasn't just time)
+              ...(dateTimeChanged && !onlyTimeChanged && lessonInSeries.id === lesson.id ? { dateTime: updateData.dateTime } : {})
+            }
+          });
+        }
+
+        res.json({ 
+          message: `${allLessonsInSeries.length} lessons updated successfully`,
+          count: allLessonsInSeries.length
+        });
+      }
     }
   } catch (error) {
     console.error('Update recurring lessons error:', error);

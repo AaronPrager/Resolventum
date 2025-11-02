@@ -89,14 +89,20 @@ router.get('/summary', async (req, res) => {
   }
 });
 
-// Outstanding balances per student (overall)
+// Outstanding balances per student or family (overall)
+// Query param: groupBy=family to group by family, otherwise by student
 router.get('/outstanding', async (req, res) => {
   try {
+    const groupByFamily = req.query.groupBy === 'family';
+    
     // Fetch necessary data
     const now = new Date();
     const userId = req.user.id;
     const [students, lessons, payments] = await Promise.all([
-      prisma.student.findMany({ where: { userId }, select: { id: true, firstName: true, lastName: true } }),
+      prisma.student.findMany({ 
+        where: { userId }, 
+        select: { id: true, firstName: true, lastName: true, familyId: true } 
+      }),
       prisma.lesson.findMany({
         where: {
           userId,
@@ -120,6 +126,8 @@ router.get('/outstanding', async (req, res) => {
 
     // Build maps
     const studentMap = new Map(students.map(s => [s.id, `${s.firstName} ${s.lastName}`]));
+    const studentFamilyMap = new Map(students.map(s => [s.id, s.familyId]));
+    
     const lessonsByStudent = new Map();
     for (const l of lessons) {
       const arr = lessonsByStudent.get(l.studentId) || [];
@@ -139,30 +147,94 @@ router.get('/outstanding', async (req, res) => {
     const studentPriceFromDb = await prisma.student.findMany({ where: { userId }, select: { id: true, pricePerLesson: true } });
     studentPriceFromDb.forEach(s => studentPriceMap.set(s.id, s.pricePerLesson || 0));
 
-    const rows = students.map(s => {
-      const sLessons = lessonsByStudent.get(s.id) || [];
-      const sPayments = paymentsByStudent.get(s.id) || [];
-      const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
-      const paid = sPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-      const balanceDue = totalBilled - paid;
-      const lastPaymentDate = sPayments.length
-        ? new Date(Math.max(...sPayments.map(p => new Date(p.date).getTime())))
-        : null;
-      return {
-        studentId: s.id,
-        studentName: studentMap.get(s.id) || 'Unknown',
-        lessonsCompleted: sLessons.length,
-        totalBilled,
-        paid,
-        balanceDue,
-        lastPaymentDate,
-      };
-    });
+    if (groupByFamily) {
+      // Group by family
+      const familiesMap = new Map(); // familyId -> { students: [], totalBilled, paid, balanceDue, lastPaymentDate }
+      
+      students.forEach(s => {
+        const familyId = s.familyId || `individual_${s.id}`; // Use individual_ prefix for students without family
+        if (!familiesMap.has(familyId)) {
+          familiesMap.set(familyId, {
+            familyId,
+            studentIds: [],
+            studentNames: [],
+            lessonsCompleted: 0,
+            totalBilled: 0,
+            paid: 0,
+            balanceDue: 0,
+            lastPaymentDate: null
+          });
+        }
+        
+        const family = familiesMap.get(familyId);
+        family.studentIds.push(s.id);
+        family.studentNames.push(`${s.firstName} ${s.lastName}`);
+        
+        const sLessons = lessonsByStudent.get(s.id) || [];
+        const sPayments = paymentsByStudent.get(s.id) || [];
+        const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
+        const paid = sPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        
+        family.lessonsCompleted += sLessons.length;
+        family.totalBilled += totalBilled;
+        family.paid += paid;
+        
+        if (sPayments.length > 0) {
+          const studentLastPayment = new Date(Math.max(...sPayments.map(p => new Date(p.date).getTime())));
+          if (!family.lastPaymentDate || studentLastPayment > family.lastPaymentDate) {
+            family.lastPaymentDate = studentLastPayment;
+          }
+        }
+      });
+      
+      // Calculate balance for each family
+      familiesMap.forEach(family => {
+        family.balanceDue = family.totalBilled - family.paid;
+        family.familyName = family.studentNames.join(', ');
+      });
+      
+      const rows = Array.from(familiesMap.values())
+        .filter(f => !f.familyId.startsWith('individual_')) // Only show families with multiple students
+        .map(f => ({
+          familyId: f.familyId,
+          familyName: f.familyName,
+          studentCount: f.studentIds.length,
+          lessonsCompleted: f.lessonsCompleted,
+          totalBilled: f.totalBilled,
+          paid: f.paid,
+          balanceDue: f.balanceDue,
+          lastPaymentDate: f.lastPaymentDate,
+        }));
+      
+      rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
+      res.json(rows);
+    } else {
+      // Group by student (original behavior)
+      const rows = students.map(s => {
+        const sLessons = lessonsByStudent.get(s.id) || [];
+        const sPayments = paymentsByStudent.get(s.id) || [];
+        const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
+        const paid = sPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const balanceDue = totalBilled - paid;
+        const lastPaymentDate = sPayments.length
+          ? new Date(Math.max(...sPayments.map(p => new Date(p.date).getTime())))
+          : null;
+        return {
+          studentId: s.id,
+          studentName: studentMap.get(s.id) || 'Unknown',
+          lessonsCompleted: sLessons.length,
+          totalBilled,
+          paid,
+          balanceDue,
+          lastPaymentDate,
+        };
+      });
 
-    // Sort by balance desc
-    rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
+      // Sort by balance desc
+      rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
 
-    res.json(rows);
+      res.json(rows);
+    }
   } catch (error) {
     console.error('Reports outstanding error:', error);
     res.status(500).json({ message: 'Failed to load outstanding balances' });
@@ -273,6 +345,106 @@ router.get('/monthly', async (req, res) => {
   } catch (error) {
     console.error('Get report error:', error);
     res.status(500).json({ message: 'Error generating report' });
+  }
+});
+
+// Per-family monthly statement (aggregates all students in a family)
+router.get('/monthly-family', async (req, res) => {
+  try {
+    const { month, year, familyId } = req.query;
+    if (!month || !year || !familyId) {
+      return res.status(400).json({ message: 'familyId, month and year are required' });
+    }
+
+    const m = parseInt(month);
+    const y = parseInt(year);
+    const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const end = new Date(y, m, 0, 23, 59, 59, 999);
+    const now = new Date();
+    const userId = req.user.id;
+
+    // Get all students in this family
+    const familyStudents = await prisma.student.findMany({
+      where: { familyId, userId },
+      select: { id: true, firstName: true, lastName: true, pricePerLesson: true }
+    });
+
+    if (familyStudents.length === 0) {
+      return res.status(404).json({ message: 'Family not found' });
+    }
+
+    const studentIds = familyStudents.map(s => s.id);
+    const studentPriceMap = new Map(familyStudents.map(s => [s.id, s.pricePerLesson || 0]));
+
+    // Previous balance: billed through end of prior month minus payments through end of prior month
+    const prevEnd = new Date(start.getTime() - 1);
+
+    const prevLessons = await prisma.lesson.findMany({
+      where: {
+        userId,
+        studentId: { in: studentIds },
+        dateTime: { lte: prevEnd },
+        NOT: { status: { in: ['cancelled', 'canceled'] } },
+        OR: [{ status: 'completed' }, { dateTime: { lt: now } }]
+      },
+      select: { price: true, studentId: true }
+    });
+    const prevBilled = prevLessons.reduce((sum, l) => {
+      const price = (l.price ?? 0) || studentPriceMap.get(l.studentId) || 0;
+      return sum + price;
+    }, 0);
+
+    const prevPaymentsAgg = await prisma.payment.aggregate({
+      _sum: { amount: true },
+      where: { userId, studentId: { in: studentIds }, date: { lte: prevEnd } }
+    });
+    const prevPaid = prevPaymentsAgg._sum.amount || 0;
+    const previousBalance = prevBilled - prevPaid;
+
+    // In-month billed (completed or past), not canceled
+    const monthLessons = await prisma.lesson.findMany({
+      where: {
+        userId,
+        studentId: { in: studentIds },
+        dateTime: { gte: start, lte: end },
+        NOT: { status: { in: ['cancelled', 'canceled'] } }
+      },
+      include: { student: { select: { firstName: true, lastName: true } } }
+    });
+
+    const billedLessons = monthLessons.filter(l => l.status === 'completed' || l.dateTime < now);
+    const billedThisMonth = billedLessons.reduce((sum, l) => {
+      const price = (l.price ?? 0) || studentPriceMap.get(l.studentId) || 0;
+      return sum + price;
+    }, 0);
+
+    // Payments this month
+    const payments = await prisma.payment.findMany({
+      where: { userId, studentId: { in: studentIds }, date: { gte: start, lte: end } },
+      include: { student: { select: { firstName: true, lastName: true } } },
+      orderBy: { date: 'desc' }
+    });
+    const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+    const familyName = familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ');
+
+    res.json({
+      familyName,
+      familyId,
+      month: m,
+      year: y,
+      previousBalance,
+      billedThisMonth,
+      paidThisMonth,
+      endingBalance,
+      lessonsThisMonth: monthLessons,
+      payments,
+      studentCount: familyStudents.length
+    });
+  } catch (error) {
+    console.error('Monthly family report error:', error);
+    res.status(500).json({ message: 'Failed to load monthly family report' });
   }
 });
 

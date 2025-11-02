@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Download } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Download, Archive, ArchiveRestore } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Students() {
@@ -12,6 +12,7 @@ export function Students() {
   const [isEditing, setIsEditing] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [jsonInput, setJsonInput] = useState('')
+  const [activeTab, setActiveTab] = useState('current') // 'current' or 'archived'
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -30,20 +31,49 @@ export function Students() {
     parentPhone: '',
     parentEmail: '',
     emergencyContactInfo: '',
-    notes: ''
+    notes: '',
+    familyId: ''
   })
+  const [families, setFamilies] = useState([])
+  const [newFamilyId, setNewFamilyId] = useState('')
+  const [useNewFamily, setUseNewFamily] = useState(false)
 
   useEffect(() => {
     fetchStudents()
-  }, [])
+    fetchFamilies()
+  }, [activeTab])
+
+  const fetchFamilies = async () => {
+    try {
+      const { data } = await api.get('/students/families')
+      setFamilies(data)
+    } catch (error) {
+      // Ignore errors, families are optional
+    }
+  }
 
   const fetchStudents = async () => {
     try {
-      const { data } = await api.get('/students')
+      // Always fetch all students (including archived) so we can show accurate counts
+      const { data } = await api.get('/students?includeArchived=true')
       setStudents(data)
-      setSortedStudents(sortStudentData(data, sortConfig.key, sortConfig.direction))
+      // Sorted students will be calculated based on active tab
     } catch (error) {
       toast.error('Failed to load students')
+    }
+  }
+
+  const handleArchive = async (studentId, archived) => {
+    try {
+      await api.patch(`/students/${studentId}/archive`, { archived })
+      toast.success(archived ? 'Student archived' : 'Student unarchived')
+      fetchStudents()
+      // If we archived the selected student, clear selection
+      if (selectedStudent?.id === studentId && archived) {
+        setSelectedStudent(null)
+      }
+    } catch (error) {
+      toast.error('Failed to update student')
     }
   }
 
@@ -117,7 +147,8 @@ export function Students() {
         parentPhone: formData.parentPhone || null,
         parentEmail: formData.parentEmail || null,
         emergencyContactInfo: formData.emergencyContactInfo || null,
-        notes: formData.notes || null
+        notes: formData.notes || null,
+        familyId: useNewFamily && newFamilyId ? newFamilyId : (formData.familyId || null)
       }
 
       if (isEditing && selectedStudent) {
@@ -129,6 +160,7 @@ export function Students() {
       }
 
       fetchStudents()
+      fetchFamilies()
       setShowModal(false)
       setIsEditing(false)
       resetForm()
@@ -165,8 +197,11 @@ export function Students() {
       parentPhone: selectedStudent.parentPhone || '',
       parentEmail: selectedStudent.parentEmail || '',
       emergencyContactInfo: selectedStudent.emergencyContactInfo || '',
-      notes: selectedStudent.notes || ''
+      notes: selectedStudent.notes || '',
+      familyId: selectedStudent.familyId || ''
     })
+    setUseNewFamily(false)
+    setNewFamilyId('')
     setIsEditing(true)
     setShowModal(true)
   }
@@ -314,8 +349,11 @@ export function Students() {
       parentPhone: '',
       parentEmail: '',
       emergencyContactInfo: '',
-      notes: ''
+      notes: '',
+      familyId: ''
     })
+    setUseNewFamily(false)
+    setNewFamilyId('')
   }
 
   const formatDate = (dateString) => {
@@ -327,37 +365,85 @@ export function Students() {
     })
   }
 
+  // Filter students by archive status
+  const currentStudents = students.filter(s => !s.archived)
+  const archivedStudents = students.filter(s => s.archived)
+  const displayedStudents = activeTab === 'current' ? currentStudents : archivedStudents
+  const displayedSortedStudents = sortStudentData(displayedStudents, sortConfig.key, sortConfig.direction)
+
   return (
     <div className="space-y-6">
       {/* Two Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Students List - Takes 2 columns */}
         <div className="lg:col-span-2 bg-white rounded-lg shadow">
-          <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">Students</h2>
-              <p className="text-sm text-gray-500 mt-1">{students.length} {students.length === 1 ? 'student' : 'students'}</p>
+          {/* Header with Tabs */}
+          <div className="border-b border-gray-200">
+            <div className="flex items-center justify-between px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Students</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {activeTab === 'current' 
+                    ? `${currentStudents.length} ${currentStudents.length === 1 ? 'student' : 'students'}`
+                    : `${archivedStudents.length} ${archivedStudents.length === 1 ? 'archived student' : 'archived students'}`
+                  }
+                </p>
+              </div>
+              <div className="flex gap-2">
+                {activeTab === 'current' && (
+                  <>
+                    <button
+                      onClick={() => setShowImportModal(true)}
+                      className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Import from JSON"
+                    >
+                      <FileText className="h-5 w-5" />
+                    </button>
+                    <button
+                      onClick={handleAddStudent}
+                      className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Add new student"
+                    >
+                      <Plus className="h-5 w-5" />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
-            <div className="flex gap-2">
+            
+            {/* Tabs */}
+            <div className="flex border-t border-gray-200">
               <button
-                onClick={() => setShowImportModal(true)}
-                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                title="Import from JSON"
+                onClick={() => {
+                  setActiveTab('current')
+                  setSelectedStudent(null)
+                }}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'current'
+                    ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
               >
-                <FileText className="h-5 w-5" />
+                Current ({currentStudents.length})
               </button>
               <button
-                onClick={handleAddStudent}
-                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                title="Add new student"
+                onClick={() => {
+                  setActiveTab('archived')
+                  setSelectedStudent(null)
+                }}
+                className={`flex-1 px-6 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'archived'
+                    ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
               >
-                <Plus className="h-5 w-5" />
+                Archived ({archivedStudents.length})
               </button>
             </div>
           </div>
           
           {/* Sortable Column Headers */}
-          {students.length > 0 && (
+          {displayedStudents.length > 0 && (
             <div className="grid grid-cols-12 gap-4 px-4 py-2 bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wider">
               <div 
                 className="col-span-5 flex items-center cursor-pointer hover:text-gray-700"
@@ -387,13 +473,13 @@ export function Students() {
           )}
           
           <div className="overflow-y-auto max-h-[590px]">
-            {students.length === 0 ? (
+            {displayedStudents.length === 0 ? (
               <div className="p-8 text-center text-gray-500 text-sm">
-                No students added yet
+                {activeTab === 'current' ? 'No students added yet' : 'No archived students'}
               </div>
             ) : (
               <ul className="divide-y divide-gray-200">
-                {sortedStudents.map((student) => {
+                {displayedSortedStudents.map((student) => {
                   const isSelected = selectedStudent?.id === student.id
                   
                   return (
@@ -448,7 +534,7 @@ export function Students() {
                           {(student.pricePerLesson || student.pricePerPackage) ? (
                             <div className="text-xs text-gray-900">
                               {student.pricePerLesson && (
-                                <div className="font-medium">${parseFloat(student.pricePerLesson).toFixed(2)}/lesson</div>
+                                <div className="font-medium">${parseFloat(student.pricePerLesson).toFixed(2)}/hour</div>
                               )}
                               {student.pricePerPackage && (
                                 <div className={student.pricePerLesson ? 'text-gray-500 mt-0.5' : 'font-medium'}>
@@ -489,6 +575,23 @@ export function Students() {
                     >
                       <Download className="h-4 w-4" />
                     </button>
+                    {selectedStudent.archived ? (
+                      <button
+                        onClick={() => handleArchive(selectedStudent.id, false)}
+                        className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                        title="Unarchive student"
+                      >
+                        <ArchiveRestore className="h-4 w-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleArchive(selectedStudent.id, true)}
+                        className="p-1.5 rounded-md text-gray-600 hover:bg-gray-50 transition-colors"
+                        title="Archive student"
+                      >
+                        <Archive className="h-4 w-4" />
+                      </button>
+                    )}
                     <button
                       onClick={handleEditStudent}
                       className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
@@ -586,8 +689,8 @@ export function Students() {
                     <div className="space-y-0.5">
                       <div className={selectedStudent.pricePerLesson ? "text-gray-900" : "text-gray-400"}>
                         {selectedStudent.pricePerLesson 
-                          ? `$${parseFloat(selectedStudent.pricePerLesson).toFixed(2)} per lesson`
-                          : 'Per lesson: -'}
+                          ? `$${parseFloat(selectedStudent.pricePerLesson).toFixed(2)} per hour`
+                          : 'Per hour: -'}
                       </div>
                       <div className={selectedStudent.pricePerPackage ? "text-gray-900" : "text-gray-400"}>
                         {selectedStudent.pricePerPackage 
@@ -800,9 +903,9 @@ export function Students() {
                       />
                     </div>
 
-                    {/* Price Per Lesson */}
+                    {/* Price Per Hour */}
                     <div className="flex items-center py-2">
-                      <label className="w-32 text-sm text-gray-600">Price/Lesson</label>
+                      <label className="w-32 text-sm text-gray-600">Price/Hour</label>
                       <input
                         type="number"
                         step="0.01"
@@ -884,6 +987,49 @@ export function Students() {
                         rows="2"
                         className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm resize-none"
                       />
+                    </div>
+
+                    {/* Family */}
+                    <div className="flex items-center py-2 mt-4">
+                      <label className="w-32 text-sm text-gray-600">Family Group</label>
+                      <div className="flex-1 space-y-2">
+                        <select
+                          value={useNewFamily ? 'new' : (formData.familyId || '')}
+                          onChange={(e) => {
+                            if (e.target.value === 'new') {
+                              setUseNewFamily(true)
+                              setFormData({ ...formData, familyId: '' })
+                            } else if (e.target.value === '') {
+                              setUseNewFamily(false)
+                              setFormData({ ...formData, familyId: '' })
+                            } else {
+                              setUseNewFamily(false)
+                              setFormData({ ...formData, familyId: e.target.value })
+                            }
+                          }}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                        >
+                          <option value="">No Family (Individual)</option>
+                          {families.map((family) => (
+                            <option key={family.familyId} value={family.familyId}>
+                              {family.members.map(m => `${m.firstName} ${m.lastName}`).join(', ')}
+                            </option>
+                          ))}
+                          <option value="new">Create New Family...</option>
+                        </select>
+                        {useNewFamily && (
+                          <input
+                            type="text"
+                            value={newFamilyId}
+                            onChange={(e) => setNewFamilyId(e.target.value)}
+                            placeholder="Enter family ID (e.g., family name or unique identifier)"
+                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                          />
+                        )}
+                        <p className="text-xs text-gray-500">
+                          Students in the same family will have combined finances and reports
+                        </p>
+                      </div>
                     </div>
 
                     {/* Notes */}

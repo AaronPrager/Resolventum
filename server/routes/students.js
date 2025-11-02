@@ -9,10 +9,18 @@ const router = express.Router();
 router.use(authenticateToken);
 
 // Get all students
+// Query params: includeArchived=true to include archived students
 router.get('/', async (req, res) => {
   try {
+    const includeArchived = req.query.includeArchived === 'true';
+    
+    const whereClause = {
+      userId: req.user.id,
+      ...(includeArchived ? {} : { archived: false }) // Default to non-archived only
+    };
+
     const students = await prisma.student.findMany({
-      where: { userId: req.user.id },
+      where: whereClause,
       include: {
         lessons: {
           orderBy: { dateTime: 'desc' },
@@ -35,6 +43,49 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Get students error:', error);
     res.status(500).json({ message: 'Error fetching students' });
+  }
+});
+
+// Get all families (groups of students with the same familyId)
+router.get('/families', async (req, res) => {
+  try {
+    const students = await prisma.student.findMany({
+      where: {
+        userId: req.user.id,
+        familyId: { not: null },
+        archived: false
+      },
+      select: {
+        familyId: true,
+        id: true,
+        firstName: true,
+        lastName: true
+      }
+    });
+
+    // Group by familyId
+    const familiesMap = new Map();
+    students.forEach(student => {
+      if (!familiesMap.has(student.familyId)) {
+        familiesMap.set(student.familyId, []);
+      }
+      familiesMap.get(student.familyId).push({
+        id: student.id,
+        firstName: student.firstName,
+        lastName: student.lastName
+      });
+    });
+
+    // Convert to array format
+    const families = Array.from(familiesMap.entries()).map(([familyId, members]) => ({
+      familyId,
+      members
+    }));
+
+    res.json(families);
+  } catch (error) {
+    console.error('Get families error:', error);
+    res.status(500).json({ message: 'Error fetching families' });
   }
 });
 
@@ -113,7 +164,8 @@ router.post(
         parentPhone: req.body.parentPhone,
         parentEmail: req.body.parentEmail,
         emergencyContactInfo: req.body.emergencyContactInfo,
-        notes: req.body.notes
+        notes: req.body.notes,
+        familyId: req.body.familyId || null // Allow setting familyId
       };
 
       const student = await prisma.student.create({
@@ -160,7 +212,8 @@ router.put('/:id', async (req, res) => {
       parentPhone: req.body.parentPhone,
       parentEmail: req.body.parentEmail,
       emergencyContactInfo: req.body.emergencyContactInfo,
-      notes: req.body.notes
+      notes: req.body.notes,
+      familyId: req.body.familyId !== undefined ? req.body.familyId : existing.familyId // Allow updating familyId
     };
 
     const student = await prisma.student.update({
@@ -196,6 +249,37 @@ router.delete('/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete student error:', error);
     res.status(500).json({ message: 'Error deleting student' });
+  }
+});
+
+// Archive/Unarchive student
+router.patch('/:id/archive', async (req, res) => {
+  try {
+    const { archived } = req.body; // true to archive, false to unarchive
+    
+    const student = await prisma.student.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    const updatedStudent = await prisma.student.update({
+      where: { id: req.params.id },
+      data: { archived: archived === true }
+    });
+
+    res.json({
+      message: archived ? 'Student archived successfully' : 'Student unarchived successfully',
+      student: updatedStudent
+    });
+  } catch (error) {
+    console.error('Archive student error:', error);
+    res.status(500).json({ message: 'Error archiving student' });
   }
 });
 

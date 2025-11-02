@@ -58,7 +58,7 @@ router.post(
   [
     body('studentId').notEmpty().withMessage('Student ID required'),
     body('name').notEmpty().withMessage('Package name required'),
-    body('totalLessons').isInt({ min: 1 }).withMessage('Valid lesson count required'),
+    body('totalHours').isFloat({ min: 0.01 }).withMessage('Valid hours required'),
     body('price').isFloat({ min: 0 }).withMessage('Valid price required')
   ],
   async (req, res) => {
@@ -132,7 +132,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// Mark package as completed (use up remaining lessons)
+// Mark package as completed (use up remaining hours)
 router.post('/:id/complete', async (req, res) => {
   try {
     // Verify package belongs to user
@@ -147,7 +147,7 @@ router.post('/:id/complete', async (req, res) => {
     const pkg = await prisma.package.update({
       where: { id: req.params.id },
       data: {
-        lessonsUsed: { increment: req.body.lessonsUsed || 1 }
+        hoursUsed: { increment: req.body.hoursUsed || 0 }
       }
     });
 

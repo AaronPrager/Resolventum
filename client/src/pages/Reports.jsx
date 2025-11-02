@@ -557,7 +557,7 @@ export function Reports() {
                         .map(l => {
                           const start = new Date(l.dateTime)
                           const end = new Date(start.getTime() + (l.duration || 0) * 60000)
-                          const time = l.allDay ? 'All Day' : `${start.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})} - ${end.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})}`
+                          const time = l.allDay ? 'All Day' : `${start.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})} - ${end.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false})}`
                           return (
                             <tr key={l.id}>
                               <td className="px-6 py-3 whitespace-nowrap">{start.toLocaleDateString('en-US',{year:'numeric',month:'short',day:'numeric'})}</td>

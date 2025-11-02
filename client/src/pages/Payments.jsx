@@ -22,8 +22,8 @@ export function Payments() {
 
   const [packageForm, setPackageForm] = useState({
     studentId: '',
-    name: '10-Lesson Package',
-    totalLessons: 10,
+    name: '10-Hour Package',
+    totalHours: 10,
     price: '',
     purchasedAt: new Date().toISOString().split('T')[0],
     expiresAt: '',
@@ -131,8 +131,8 @@ export function Payments() {
   const resetPackageForm = () => {
     setPackageForm({
       studentId: '',
-      name: '10-Lesson Package',
-      totalLessons: 10,
+      name: '10-Hour Package',
+      totalHours: 10,
       price: '',
       purchasedAt: new Date().toISOString().split('T')[0],
       expiresAt: '',
@@ -196,7 +196,7 @@ export function Payments() {
       const submitData = {
         studentId: packageForm.studentId,
         name: packageForm.name,
-        totalLessons: Number(packageForm.totalLessons),
+        totalHours: parseFloat(packageForm.totalHours),
         price: parseFloat(packageForm.price),
         purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
         ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : {})
@@ -620,19 +620,20 @@ export function Payments() {
                         value={packageForm.name}
                         onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
                         className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
-                        placeholder="e.g., 10-Lesson Package"
+                        placeholder="e.g., 10-Hour Package"
                       />
                     </div>
 
-                    {/* Total Lessons */}
+                    {/* Total Hours */}
                     <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Lessons</label>
+                      <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
                       <input
                         type="number"
-                        min="1"
+                        min="0.01"
+                        step="0.25"
                         required
-                        value={packageForm.totalLessons}
-                        onChange={(e) => setPackageForm({ ...packageForm, totalLessons: e.target.value })}
+                        value={packageForm.totalHours}
+                        onChange={(e) => setPackageForm({ ...packageForm, totalHours: e.target.value })}
                         className="w-32 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
                         placeholder="10"
                       />

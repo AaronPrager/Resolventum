@@ -56,6 +56,8 @@ model Student {
   emergencyContactInfo String?
   
   notes       String?
+  archived    Boolean  @default(false)
+  familyId    String?  // Groups students from the same family for combined finances/reports
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   lessons     Lesson[]
@@ -64,6 +66,7 @@ model Student {
 
   @@index([userId])
   @@index([firstName, lastName])
+  @@index([familyId])
 }
 
 model Lesson {
@@ -102,8 +105,8 @@ model Package {
   studentId   String
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   name        String
-  totalLessons Int
-  lessonsUsed Int      @default(0)
+  totalHours  Float    // Total hours in the package
+  hoursUsed   Float    @default(0)  // Hours consumed from the package
   price       Float
   purchasedAt DateTime @default(now())
   expiresAt   DateTime?

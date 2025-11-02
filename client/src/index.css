@@ -216,6 +216,18 @@ body {
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
 
+/* Hide default event time labels in week/day view to avoid redundancy */
+.rbc-time-view .rbc-event-label,
+.rbc-time-view .rbc-event-time {
+  display: none !important;
+}
+
+/* Ensure custom event component fills the entire event area */
+.rbc-time-view .rbc-event-content {
+  width: 100%;
+  padding: 0;
+}
+
 /* Today column highlighting */
 .rbc-time-view .rbc-today {
   background-color: #eff6ff;
