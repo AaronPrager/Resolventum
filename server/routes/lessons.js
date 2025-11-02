@@ -417,19 +417,28 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'dateTime is required' });
     }
 
-    // Calculate price based on student's hourly rate
-    // The student's pricePerLesson is already set to package rate if a package was purchased
+    // Use price from request if provided, otherwise calculate from hourly rate, otherwise keep current price
     const finalDuration = duration ? parseInt(duration) : currentLesson.duration;
     const hourlyRate = student.pricePerLesson || 0;
     const lessonHours = finalDuration / 60; // Convert minutes to hours
-    const calculatedPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (price !== undefined ? parseFloat(price) : currentLesson.price);
+    let finalPrice;
+    if (price !== undefined) {
+      // User explicitly set the price - use it
+      finalPrice = parseFloat(price);
+    } else if (hourlyRate > 0) {
+      // Calculate from hourly rate
+      finalPrice = hourlyRate * lessonHours;
+    } else {
+      // Keep current price
+      finalPrice = currentLesson.price;
+    }
 
     const updateData = {
       studentId: finalStudentId,
       dateTime: new Date(dateTime),
       duration: finalDuration,
       subject: subject !== undefined ? subject : currentLesson.subject,
-      price: calculatedPrice,
+      price: finalPrice,
       notes: notes !== undefined ? (notes || null) : currentLesson.notes,
       status: status || currentLesson.status || 'scheduled',
       locationType: locationType || currentLesson.locationType || 'in-person',

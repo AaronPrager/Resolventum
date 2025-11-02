@@ -140,6 +140,13 @@ export function Lessons() {
       const { data } = await api.get('/lessons')
       setLessons(data)
       applyFilterAndSort(data)
+      // Update selected lesson if it exists (to reflect any changes)
+      if (selectedLesson) {
+        const updatedLesson = data.find(l => l.id === selectedLesson.id)
+        if (updatedLesson) {
+          setSelectedLesson(updatedLesson)
+        }
+      }
     } catch (error) {
       toast.error('Failed to load lessons')
     }
@@ -293,25 +300,37 @@ export function Lessons() {
           setShowRecurringOptions(true)
         } else if (selectedLesson.isRecurring && !formData.isRecurring) {
           // Converting recurring to single
-          await api.put(`/lessons/${selectedLesson.id}`, submitData)
+          const { data: updatedLesson } = await api.put(`/lessons/${selectedLesson.id}`, submitData)
           toast.success('Lesson updated to single event')
-          fetchLessons()
+          await fetchLessons()
+          // Update selected lesson with the fresh data
+          if (updatedLesson) {
+            setSelectedLesson(updatedLesson)
+          }
           setShowModal(false)
           setIsEditing(false)
           resetForm()
         } else if (!selectedLesson.isRecurring && formData.isRecurring) {
           // Converting single to recurring
-          await api.put(`/lessons/${selectedLesson.id}`, submitData)
+          const { data: updatedLesson } = await api.put(`/lessons/${selectedLesson.id}`, submitData)
           toast.success('Lesson converted to recurring series')
-          fetchLessons()
+          await fetchLessons()
+          // Update selected lesson with the fresh data
+          if (updatedLesson) {
+            setSelectedLesson(updatedLesson)
+          }
           setShowModal(false)
           setIsEditing(false)
           resetForm()
         } else {
           // Single lesson update
-          await api.put(`/lessons/${selectedLesson.id}`, submitData)
+          const { data: updatedLesson } = await api.put(`/lessons/${selectedLesson.id}`, submitData)
           toast.success('Lesson updated successfully')
-          fetchLessons()
+          await fetchLessons()
+          // Update selected lesson with the fresh data
+          if (updatedLesson) {
+            setSelectedLesson(updatedLesson)
+          }
           setShowModal(false)
           setIsEditing(false)
           resetForm()
@@ -396,14 +415,21 @@ export function Lessons() {
     }
 
     try {
+      let updatedLesson;
       if (updateAll) {
-        await api.put(`/lessons/${selectedLesson.id}/recurring-future`, submitData)
+        const { data } = await api.put(`/lessons/${selectedLesson.id}/recurring-future`, submitData)
+        updatedLesson = data
         toast.success('Recurring lessons updated successfully')
       } else {
-        await api.put(`/lessons/${selectedLesson.id}`, submitData)
+        const { data } = await api.put(`/lessons/${selectedLesson.id}`, submitData)
+        updatedLesson = data
         toast.success('Lesson updated successfully')
       }
-      fetchLessons()
+      await fetchLessons()
+      // Update selected lesson with the fresh data
+      if (updatedLesson) {
+        setSelectedLesson(updatedLesson)
+      }
       setShowModal(false)
       setIsEditing(false)
       setShowRecurringOptions(false)
@@ -1250,6 +1276,26 @@ export function Lessons() {
                         </div>
                       </div>
                     )}
+
+                    {/* Price */}
+                    <div className="flex items-center py-2">
+                      <label className="w-24 text-sm text-gray-600">Price</label>
+                      <div className="flex-1 flex items-center gap-2">
+                        <span className="text-gray-500">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={formData.price}
+                          onChange={(e) => {
+                            const newPrice = parseFloat(e.target.value) || 0
+                            setFormData({ ...formData, price: newPrice })
+                          }}
+                          className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
 
                     {/* Status */}
                     <div className="flex items-center py-2">
