@@ -14,7 +14,7 @@ export function Reports() {
   const [recentPayments, setRecentPayments] = useState([])
   const [allPayments, setAllPayments] = useState([])
   const [loading, setLoading] = useState(true)
-  const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'paymentHistory'|'monthlyTotals'|'schedule'|'attendance'|'cancellations'|'packages'
+  const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'monthlyTotals'|'monthlyAll'|'schedule'|'attendance'|'cancellations'|'packages'
   const [packagesReport, setPackagesReport] = useState({ packages: [], summary: {} })
   const [packagesFilter, setPackagesFilter] = useState('all') // 'all', 'active', 'inactive'
   const [selectedPackageId, setSelectedPackageId] = useState(null)
@@ -36,6 +36,12 @@ export function Reports() {
   const [year, setYear] = useState(String(now.getFullYear()))
   const [studentMonthly, setStudentMonthly] = useState({ lessons: [], payments: [] })
   const [loadingStudentMonthly, setLoadingStudentMonthly] = useState(false)
+
+  // Monthly all students report state
+  const [monthlyAllReport, setMonthlyAllReport] = useState(null)
+  const [loadingMonthlyAll, setLoadingMonthlyAll] = useState(false)
+  const [monthlyAllMonth, setMonthlyAllMonth] = useState(String(now.getMonth() + 1).padStart(2, '0'))
+  const [monthlyAllYear, setMonthlyAllYear] = useState(String(now.getFullYear()))
 
   const fetchData = async () => {
     try {
@@ -181,6 +187,21 @@ export function Reports() {
     }
   }
 
+  const loadMonthlyAll = async () => {
+    try {
+      setLoadingMonthlyAll(true)
+      const res = await api.get('/reports/monthly-all', {
+        params: { month: Number(monthlyAllMonth), year: Number(monthlyAllYear) },
+      })
+      setMonthlyAllReport(res.data)
+    } catch (err) {
+      toast.error('Failed to load monthly report for all students')
+      console.error(err)
+    } finally {
+      setLoadingMonthlyAll(false)
+    }
+  }
+
   const totalBilledForStudent = studentMonthly.lessons
     .filter(l => l.status === 'completed')
     .reduce((sum, l) => sum + (l.price || 0), 0)
@@ -306,21 +327,23 @@ export function Reports() {
                 Outstanding Balances
               </button>
             </li>
-            
-            <li>
-              <button
-                onClick={() => setActiveReport('paymentHistory')}
-                className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'paymentHistory' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
-              >
-                Payment History
-              </button>
-            </li>
             <li>
               <button
                 onClick={() => setActiveReport('monthlyTotals')}
                 className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'monthlyTotals' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
               >
                 Monthly Payment Totals
+              </button>
+            </li>
+            <li>
+              <button
+                onClick={() => {
+                  setActiveReport('monthlyAll')
+                  loadMonthlyAll()
+                }}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm ${activeReport === 'monthlyAll' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-gray-50 text-gray-700'}`}
+              >
+                Monthly Report (All Students)
               </button>
             </li>
             <li>
@@ -447,47 +470,6 @@ export function Reports() {
             </>
           )}
 
-          {activeReport === 'paymentHistory' && (
-            <>
-              <div className="px-4 py-3 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Payment History Report</h2>
-                <p className="text-sm text-gray-500">Chronological list of all payments received.</p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Method</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {allPayments.length === 0 ? (
-                      <tr>
-                        <td colSpan="5" className="px-6 py-6 text-center text-sm text-gray-500">No payments</td>
-                      </tr>
-                    ) : (
-                      [...allPayments]
-                        .sort((a, b) => new Date(b.date) - new Date(a.date))
-                        .map((p) => (
-                          <tr key={p.id}>
-                            <td className="px-6 py-3 whitespace-nowrap">{new Date(p.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</td>
-                            <td className="px-6 py-3 whitespace-nowrap text-gray-900">{p.student ? `${p.student.firstName} ${p.student.lastName}` : (p.studentName || '-')}</td>
-                            <td className="px-6 py-3 whitespace-nowrap">{formatCurrency(p.amount)}</td>
-                            <td className="px-6 py-3 whitespace-nowrap capitalize text-gray-700">{p.method}</td>
-                            <td className="px-6 py-3 whitespace-nowrap text-gray-700">{p.notes || '-'}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-
           {activeReport === 'monthlyTotals' && (
             <>
               <div className="px-4 py-3 border-b border-gray-200">
@@ -532,6 +514,262 @@ export function Reports() {
               </div>
             </>
           )}
+
+          {activeReport === 'monthlyAll' && (
+            <>
+              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Monthly Report - All Students</h2>
+                  <p className="text-sm text-gray-500">Lessons, payments, and balances for all students in the selected month.</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-700">Month:</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="12"
+                      value={monthlyAllMonth}
+                      onChange={(e) => setMonthlyAllMonth(e.target.value)}
+                      onBlur={(e) => {
+                        const val = e.target.value;
+                        if (val && !isNaN(val)) {
+                          const num = parseInt(val, 10);
+                          if (num >= 1 && num <= 12) {
+                            setMonthlyAllMonth(String(num).padStart(2, '0'));
+                          }
+                        }
+                      }}
+                      className="w-16 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-gray-700">Year:</label>
+                    <input
+                      type="number"
+                      min="2000"
+                      max="2100"
+                      value={monthlyAllYear}
+                      onChange={(e) => setMonthlyAllYear(e.target.value)}
+                      className="w-20 px-2 py-1 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                  <button
+                    onClick={loadMonthlyAll}
+                    disabled={loadingMonthlyAll}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                  >
+                    {loadingMonthlyAll ? 'Loading...' : 'Load Report'}
+                  </button>
+                </div>
+              </div>
+
+              {loadingMonthlyAll ? (
+                <div className="p-8 text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+                  <p className="mt-2 text-gray-600">Loading report...</p>
+                </div>
+              ) : monthlyAllReport ? (
+                <div className="p-4 space-y-6">
+                  {/* Summary Totals */}
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <h3 className="text-md font-semibold text-gray-900 mb-3">Summary Totals</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500">Previous Balance</p>
+                        <p className="text-lg font-semibold">{formatCurrency(monthlyAllReport.totals.previousBalance)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Billed This Month</p>
+                        <p className="text-lg font-semibold">{formatCurrency(monthlyAllReport.totals.billedThisMonth)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Paid This Month</p>
+                        <p className="text-lg font-semibold">{formatCurrency(monthlyAllReport.totals.paidThisMonth)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Ending Balance</p>
+                        <p className={`text-lg font-semibold ${
+                          monthlyAllReport.totals.endingBalance > 0 ? 'text-blue-600' : 
+                          monthlyAllReport.totals.endingBalance < 0 ? 'text-red-600' : 
+                          'text-gray-900'
+                        }`}>
+                          {formatCurrency(monthlyAllReport.totals.endingBalance)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-gray-500">Total Lessons:</p>
+                        <p className="font-semibold">{monthlyAllReport.totals.totalLessons}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Billed Lessons:</p>
+                        <p className="font-semibold">{monthlyAllReport.totals.totalBilledLessons}</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-500">Total Payments:</p>
+                        <p className="font-semibold">{monthlyAllReport.totals.totalPayments}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Students Table */}
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Previous Balance</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Billed This Month</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Paid This Month</th>
+                          <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Ending Balance</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Lessons</th>
+                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Payments</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {monthlyAllReport.students.length === 0 ? (
+                          <tr>
+                            <td colSpan="7" className="px-4 py-6 text-center text-sm text-gray-500">No students found</td>
+                          </tr>
+                        ) : (
+                          monthlyAllReport.students.map((student) => (
+                            <tr key={student.studentId} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                                {student.studentName}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">
+                                {formatCurrency(student.previousBalance)}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">
+                                {formatCurrency(student.billedThisMonth)}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">
+                                {formatCurrency(student.paidThisMonth)}
+                              </td>
+                              <td className={`px-4 py-3 whitespace-nowrap text-sm text-right font-semibold ${
+                                student.endingBalance > 0 ? 'text-blue-600' : 
+                                student.endingBalance < 0 ? 'text-red-600' : 
+                                'text-gray-900'
+                              }`}>
+                                {formatCurrency(student.endingBalance)}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-center text-gray-500">
+                                {student.lessonsCount} ({student.billedLessonsCount} billed)
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-center text-gray-500">
+                                {student.paymentsCount}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Detailed Student Breakdown */}
+                  <div className="space-y-4">
+                    <h3 className="text-md font-semibold text-gray-900">Student Details</h3>
+                    {monthlyAllReport.students.map((student) => (
+                      <div key={student.studentId} className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                          <h4 className="font-semibold text-gray-900">{student.studentName}</h4>
+                          <div className="flex gap-4 mt-1 text-xs text-gray-600">
+                            <span>Previous Balance: {formatCurrency(student.previousBalance)}</span>
+                            <span>Billed: {formatCurrency(student.billedThisMonth)}</span>
+                            <span>Paid: {formatCurrency(student.paidThisMonth)}</span>
+                            <span className={`font-semibold ${
+                              student.endingBalance > 0 ? 'text-blue-600' : 
+                              student.endingBalance < 0 ? 'text-red-600' : 
+                              'text-gray-900'
+                            }`}>
+                              Ending Balance: {formatCurrency(student.endingBalance)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Lessons */}
+                        {student.lessons.length > 0 && (
+                          <div className="p-4">
+                            <h5 className="text-sm font-semibold text-gray-700 mb-2">Lessons ({student.lessons.length})</h5>
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-xs">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th className="px-2 py-1 text-left">Date</th>
+                                    <th className="px-2 py-1 text-left">Subject</th>
+                                    <th className="px-2 py-1 text-right">Duration</th>
+                                    <th className="px-2 py-1 text-right">Price</th>
+                                    <th className="px-2 py-1 text-center">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                  {student.lessons.map((lesson) => (
+                                    <tr key={lesson.id}>
+                                      <td className="px-2 py-1">
+                                        {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                                      </td>
+                                      <td className="px-2 py-1">{lesson.subject || '-'}</td>
+                                      <td className="px-2 py-1 text-right">{lesson.duration || '-'}</td>
+                                      <td className="px-2 py-1 text-right">{formatCurrency(lesson.price ?? 0)}</td>
+                                      <td className="px-2 py-1 text-center">
+                                        <span className={`px-2 py-0.5 rounded text-xs ${
+                                          new Date(lesson.dateTime) < new Date() ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                        }`}>
+                                          {new Date(lesson.dateTime) < new Date() ? 'Billed' : 'Future'}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Payments */}
+                        {student.payments.length > 0 && (
+                          <div className="p-4 border-t border-gray-200">
+                            <h5 className="text-sm font-semibold text-gray-700 mb-2">Payments ({student.payments.length})</h5>
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-xs">
+                                <thead className="bg-gray-50">
+                                  <tr>
+                                    <th className="px-2 py-1 text-left">Date</th>
+                                    <th className="px-2 py-1 text-right">Amount</th>
+                                    <th className="px-2 py-1 text-left">Method</th>
+                                    <th className="px-2 py-1 text-left">Notes</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                  {student.payments.map((payment) => (
+                                    <tr key={payment.id}>
+                                      <td className="px-2 py-1">
+                                        {new Date(payment.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                      </td>
+                                      <td className="px-2 py-1 text-right font-semibold">{formatCurrency(payment.amount)}</td>
+                                      <td className="px-2 py-1">{payment.method || '-'}</td>
+                                      <td className="px-2 py-1">{payment.notes || '-'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="p-8 text-center text-gray-500">
+                  <p>Select a month and year, then click "Load Report" to view the monthly report for all students.</p>
+                </div>
+              )}
+            </>
+          )}
+
           {activeReport === 'schedule' && (
             <>
               <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
@@ -1021,22 +1259,27 @@ export function Reports() {
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Previous Balance</p>
                         <p className={`text-xl font-semibold ${studentStatement.previousBalance < 0 ? 'text-green-700' : 'text-gray-900'}`}>${(studentStatement.previousBalance || 0).toFixed(2)}</p>
+                        <p className="text-xs text-gray-400 mt-1">From prior months</p>
                       </div>
                       <div className="bg-white border rounded-md p-4">
-                        <p className="text-xs text-gray-500">Billed</p>
+                        <p className="text-xs text-gray-500">Billed This Month</p>
                         <p className="text-xl font-semibold text-gray-900">${(studentStatement.billedThisMonth || 0).toFixed(2)}</p>
+                        <p className="text-xs text-gray-400 mt-1">Completed or past lessons</p>
                       </div>
                       <div className="bg-white border rounded-md p-4">
-                        <p className="text-xs text-gray-500">Payments</p>
+                        <p className="text-xs text-gray-500">Payments This Month</p>
                         <p className="text-xl font-semibold text-gray-900">${(studentStatement.paidThisMonth || 0).toFixed(2)}</p>
+                        <p className="text-xs text-gray-400 mt-1">Received this month</p>
                       </div>
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Credit Available</p>
                         <p className="text-xl font-semibold text-blue-700">${(studentStatement.creditBalance || 0).toFixed(2)}</p>
+                        <p className="text-xs text-gray-400 mt-1">Unapplied credit</p>
                       </div>
                       <div className="bg-white border rounded-md p-4">
                         <p className="text-xs text-gray-500">Ending Balance</p>
                         <p className={`text-xl font-semibold ${studentStatement.endingBalance < 0 ? 'text-green-700' : 'text-gray-900'}`}>${(studentStatement.endingBalance || 0).toFixed(2)}</p>
+                        <p className="text-xs text-gray-400 mt-1">Total owed</p>
                       </div>
                     </div>
 

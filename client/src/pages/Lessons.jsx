@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Clock, User, Calendar as CalendarIcon, MapPin, Video, DollarSign, FileText, ChevronUp, ChevronDown } from 'lucide-react'
+import { Plus, Edit, Trash2, Clock, User, Calendar as CalendarIcon, MapPin, Video, DollarSign, FileText, ChevronUp, ChevronDown, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 // Custom 24-hour time picker component
@@ -51,9 +51,14 @@ export function Lessons() {
   const [selectedLesson, setSelectedLesson] = useState(null)
   const [students, setStudents] = useState([])
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('')
+  const [selectedMonth, setSelectedMonth] = useState('')
+  const [selectedYear, setSelectedYear] = useState('')
   const [showUnpaidOnly, setShowUnpaidOnly] = useState(false)
   const [showPastOnly, setShowPastOnly] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [showLinkPaymentModal, setShowLinkPaymentModal] = useState(false)
+  const [availablePayments, setAvailablePayments] = useState([])
+  const [selectedPaymentId, setSelectedPaymentId] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const [showRecurringOptions, setShowRecurringOptions] = useState(false)
   const [recurringAction, setRecurringAction] = useState(null)
@@ -135,9 +140,23 @@ export function Lessons() {
     fetchStudents()
   }, [])
 
+  useEffect(() => {
+    fetchLessons()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth, selectedYear, selectedStudentFilter])
+
   const fetchLessons = async () => {
     try {
-      const { data } = await api.get('/lessons')
+      const params = {}
+      if (selectedMonth && selectedYear) {
+        params.month = selectedMonth
+        params.year = selectedYear
+      }
+      if (selectedStudentFilter) {
+        params.studentId = selectedStudentFilter
+      }
+      
+      const { data } = await api.get('/lessons', { params })
       setLessons(data)
       applyFilterAndSort(data)
       // Update selected lesson if it exists (to reflect any changes)
@@ -153,11 +172,9 @@ export function Lessons() {
   }
 
   const applyFilterAndSort = (lessonsData) => {
-    // Filter by student if selected
+    // Note: Student and month/year filtering is now done on the backend
+    // Only apply client-side filters here (unpaid, past)
     let filteredLessons = lessonsData
-    if (selectedStudentFilter) {
-      filteredLessons = filteredLessons.filter(lesson => lesson.studentId === selectedStudentFilter)
-    }
     
     // Filter by unpaid only if enabled
     if (showUnpaidOnly) {
@@ -180,7 +197,7 @@ export function Lessons() {
   useEffect(() => {
     applyFilterAndSort(lessons)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStudentFilter, showUnpaidOnly, showPastOnly, sortConfig.key, sortConfig.direction])
+  }, [lessons, showUnpaidOnly, showPastOnly, sortConfig.key, sortConfig.direction])
 
   const fetchStudents = async () => {
     try {
@@ -188,6 +205,19 @@ export function Lessons() {
       setStudents(data)
     } catch (error) {
       toast.error('Failed to load students')
+    }
+  }
+
+  const fetchPaymentsForStudent = async (studentId) => {
+    try {
+      const { data } = await api.get('/payments', {
+        params: { studentId }
+      })
+      setAvailablePayments(data || [])
+    } catch (error) {
+      console.error('Error fetching payments:', error)
+      toast.error('Failed to load payments')
+      setAvailablePayments([])
     }
   }
 
@@ -561,8 +591,8 @@ export function Lessons() {
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Lessons</h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  {selectedStudentFilter ? sortedLessons.length : lessons.length} {selectedStudentFilter ? sortedLessons.length === 1 ? 'lesson' : 'lessons' : lessons.length === 1 ? 'lesson' : 'lessons'}
-                  {selectedStudentFilter && ` (filtered from ${lessons.length} total)`}
+                  {sortedLessons.length} {sortedLessons.length === 1 ? 'lesson' : 'lessons'}
+                  {(selectedStudentFilter || selectedMonth || selectedYear) && ` (filtered)`}
                 </p>
               </div>
               <button
@@ -575,28 +605,66 @@ export function Lessons() {
             </div>
             {/* Filters */}
             <div className="space-y-2">
-              {/* Student Filter */}
-              <div className="flex items-center gap-2">
-                <label className="text-sm text-gray-600 whitespace-nowrap">Filter by student:</label>
-                <select
-                  value={selectedStudentFilter}
-                  onChange={(e) => setSelectedStudentFilter(e.target.value)}
-                  className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
-                >
-                  <option value="">All Students</option>
-                  {students
-                    .filter(s => !s.archived)
-                    .sort((a, b) => {
-                      const nameA = `${a.firstName} ${a.lastName}`.toLowerCase()
-                      const nameB = `${b.firstName} ${b.lastName}`.toLowerCase()
-                      return nameA.localeCompare(nameB)
-                    })
-                    .map(student => (
-                      <option key={student.id} value={student.id}>
-                        {student.firstName} {student.lastName}
-                      </option>
-                    ))}
-                </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {/* Student Filter */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600 whitespace-nowrap">Filter by student:</label>
+                  <select
+                    value={selectedStudentFilter}
+                    onChange={(e) => setSelectedStudentFilter(e.target.value)}
+                    className="flex-1 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">All Students</option>
+                    {students
+                      .filter(s => !s.archived)
+                      .sort((a, b) => {
+                        const nameA = `${a.firstName} ${a.lastName}`.toLowerCase()
+                        const nameB = `${b.firstName} ${b.lastName}`.toLowerCase()
+                        return nameA.localeCompare(nameB)
+                      })
+                      .map(student => (
+                        <option key={student.id} value={student.id}>
+                          {student.firstName} {student.lastName}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {/* Month/Year Filter */}
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600 whitespace-nowrap">Filter by month:</label>
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">All Months</option>
+                    {Array.from({ length: 12 }, (_, i) => {
+                      const monthNum = i + 1
+                      const date = new Date(2000, i, 1)
+                      return (
+                        <option key={monthNum} value={String(monthNum).padStart(2, '0')}>
+                          {date.toLocaleDateString('en-US', { month: 'long' })}
+                        </option>
+                      )
+                    })}
+                  </select>
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(e.target.value)}
+                    className="border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">All Years</option>
+                    {Array.from({ length: 10 }, (_, i) => {
+                      const year = new Date().getFullYear() - 5 + i
+                      return (
+                        <option key={year} value={year}>
+                          {year}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </div>
               </div>
               {/* Quick Filters */}
               <div className="flex items-center gap-4">
@@ -679,7 +747,17 @@ export function Lessons() {
                   return (
                     <li
                       key={lesson.id}
-                      onClick={() => setSelectedLesson(lesson)}
+                      onClick={async () => {
+                        // Fetch full lesson details including payment/package info
+                        try {
+                          const { data: fullLesson } = await api.get(`/lessons/${lesson.id}`)
+                          setSelectedLesson(fullLesson)
+                        } catch (error) {
+                          console.error('Error fetching lesson details:', error)
+                          // Fallback to lesson from list if API call fails
+                          setSelectedLesson(lesson)
+                        }
+                      }}
                       className={`cursor-pointer transition-colors ${
                         isSelected 
                           ? 'bg-indigo-100 border-l-4 border-indigo-700 pl-4 pr-4 py-3' 
@@ -841,9 +919,49 @@ export function Lessons() {
                 </div>
 
                 {/* Payment Information */}
-                {selectedLesson.isPaid || selectedLesson.paidAmount > 0 ? (
-                  <div className="space-y-1.5 pt-2 border-t">
+                <div className="space-y-1.5 pt-2 border-t">
+                  <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</h3>
+                    {selectedLesson.status !== 'cancelled' && selectedLesson.status !== 'canceled' && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={async () => {
+                            await fetchPaymentsForStudent(selectedLesson.studentId)
+                            setSelectedPaymentId('')
+                            setShowLinkPaymentModal(true)
+                          }}
+                          className="px-2 py-1 text-xs font-medium rounded-md transition-colors bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                          title="Link a payment to this lesson"
+                        >
+                          Link Payment
+                        </button>
+                        <button
+                          onClick={async () => {
+                            try {
+                              const newPaidStatus = !selectedLesson.isPaid
+                              const { data: updatedLesson } = await api.patch(`/lessons/${selectedLesson.id}/payment-status`, {
+                                isPaid: newPaidStatus
+                              })
+                              setSelectedLesson(updatedLesson)
+                              await fetchLessons()
+                              toast.success(newPaidStatus ? 'Lesson marked as paid' : 'Lesson marked as unpaid')
+                            } catch (error) {
+                              console.error('Error updating payment status:', error)
+                              toast.error('Failed to update payment status')
+                            }
+                          }}
+                          className={`px-2 py-1 text-xs font-medium rounded-md transition-colors ${
+                            selectedLesson.isPaid
+                              ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                              : 'bg-green-100 text-green-700 hover:bg-green-200'
+                          }`}
+                        >
+                          {selectedLesson.isPaid ? 'Mark Unpaid' : 'Mark Paid'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {(selectedLesson.isPaid || selectedLesson.paidAmount > 0) ? (
                     <div className="text-sm space-y-2">
                       <div className="flex items-center gap-2">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -899,21 +1017,28 @@ export function Lessons() {
                         </div>
                       ) : (
                         <div className="text-sm text-gray-500">
-                          Payment information not available
+                          {selectedLesson.isPaid ? (
+                            <div>
+                              <p>This lesson was marked as paid manually.</p>
+                              <p className="text-xs mt-1">No payment or package is linked to this lesson.</p>
+                            </div>
+                          ) : (
+                            <div>
+                              <p>Payment information not available.</p>
+                              <p className="text-xs mt-1">This lesson is not linked to a payment or package.</p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5 pt-2 border-t">
-                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</h3>
+                  ) : (
                     <div className="flex items-center gap-2 text-sm">
                       <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
                         Unpaid
                       </span>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Status */}
                 <div className="space-y-1.5 pt-2 border-t">
@@ -1398,6 +1523,89 @@ export function Lessons() {
                     className="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:text-sm"
                   >
                     Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Link Payment Modal */}
+      {showLinkPaymentModal && selectedLesson && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Link Payment to Lesson</h3>
+                <button
+                  onClick={() => {
+                    setShowLinkPaymentModal(false)
+                    setSelectedPaymentId('')
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Payment
+                  </label>
+                  <select
+                    value={selectedPaymentId}
+                    onChange={(e) => setSelectedPaymentId(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">-- Select a payment --</option>
+                    {availablePayments.map((payment) => (
+                      <option key={payment.id} value={payment.id}>
+                        ${payment.amount.toFixed(2)} - {new Date(payment.date).toLocaleDateString()} ({payment.method || 'other'})
+                        {payment.notes && ` - ${payment.notes.substring(0, 30)}`}
+                      </option>
+                    ))}
+                  </select>
+                  {availablePayments.length === 0 && (
+                    <p className="text-xs text-gray-500 mt-1">No payments found for this student</p>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <button
+                    onClick={() => {
+                      setShowLinkPaymentModal(false)
+                      setSelectedPaymentId('')
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedPaymentId) {
+                        toast.error('Please select a payment')
+                        return
+                      }
+                      try {
+                        const { data: updatedLesson } = await api.patch(`/lessons/${selectedLesson.id}/link-payment`, {
+                          paymentId: selectedPaymentId
+                        })
+                        setSelectedLesson(updatedLesson)
+                        await fetchLessons()
+                        setShowLinkPaymentModal(false)
+                        setSelectedPaymentId('')
+                        toast.success('Payment linked to lesson successfully')
+                      } catch (error) {
+                        console.error('Error linking payment:', error)
+                        toast.error(error.response?.data?.message || 'Failed to link payment to lesson')
+                      }
+                    }}
+                    disabled={!selectedPaymentId}
+                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Link Payment
                   </button>
                 </div>
               </div>

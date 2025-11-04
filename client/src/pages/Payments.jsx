@@ -15,6 +15,10 @@ export function Payments() {
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
   const [filterStudentId, setFilterStudentId] = useState('')
+  const [isSubmittingPackage, setIsSubmittingPackage] = useState(false)
+  const [showLinkLessonModal, setShowLinkLessonModal] = useState(false)
+  const [availableLessons, setAvailableLessons] = useState([])
+  const [selectedLessonId, setSelectedLessonId] = useState('')
   const [formData, setFormData] = useState({
     studentId: '',
     amount: '',
@@ -43,8 +47,28 @@ export function Payments() {
     try {
       const { data } = await api.get('/payments')
       setPayments(data)
+      // Update selected payment if it exists
+      if (selectedPayment && data.length > 0) {
+        const updatedPayment = data.find(p => p.id === selectedPayment.id)
+        if (updatedPayment) {
+          setSelectedPayment(updatedPayment)
+        }
+      }
     } catch (error) {
       toast.error('Failed to load payments')
+    }
+  }
+
+  const fetchLessonsForStudent = async (studentId) => {
+    try {
+      const { data } = await api.get('/lessons', {
+        params: { studentId }
+      })
+      setAvailableLessons(data || [])
+    } catch (error) {
+      console.error('Error fetching lessons:', error)
+      toast.error('Failed to load lessons')
+      setAvailableLessons([])
     }
   }
 
@@ -136,22 +160,38 @@ export function Payments() {
         }
       }
       
-      // Ensure date is properly formatted
+      // Ensure date is properly formatted in local time
+      // Create date at local midnight to avoid timezone shifts
+      const [year, month, day] = formData.date.split('-').map(Number)
+      const localDate = new Date(year, month - 1, day, 0, 0, 0, 0)
       const submitData = {
         ...formData,
         amount: parseFloat(formData.amount),
-        date: new Date(formData.date).toISOString()
+        date: localDate.toISOString()
       }
       
+      let updatedPayment;
       if (editingPayment) {
-        await api.put(`/payments/${editingPayment.id}`, submitData)
+        const { data } = await api.put(`/payments/${editingPayment.id}`, submitData)
+        updatedPayment = data
         toast.success('Payment updated successfully')
       } else {
-        await api.post('/payments', submitData)
+        const { data } = await api.post('/payments', submitData)
+        updatedPayment = data
         toast.success('Payment recorded successfully')
       }
       
-      fetchPayments()
+      await fetchPayments()
+      
+      // Update selected payment if it matches the edited payment
+      if (editingPayment && selectedPayment && selectedPayment.id === editingPayment.id) {
+        setSelectedPayment(updatedPayment)
+      } else if (!editingPayment && updatedPayment) {
+        // If creating new payment, optionally select it
+        setSelectedPayment(updatedPayment)
+      }
+      
+      setEditingPayment(null)
       setShowModal(false)
       resetForm()
     } catch (error) {
@@ -161,11 +201,14 @@ export function Payments() {
 
   const handleEdit = (payment) => {
     setEditingPayment(payment)
+    // Format date in local time to avoid timezone shifts
+    const paymentDate = new Date(payment.date)
+    const localDate = `${paymentDate.getFullYear()}-${String(paymentDate.getMonth() + 1).padStart(2, '0')}-${String(paymentDate.getDate()).padStart(2, '0')}`
     setFormData({
       studentId: payment.studentId,
       amount: payment.amount.toString(),
       method: payment.method,
-      date: new Date(payment.date).toISOString().split('T')[0],
+      date: localDate,
       notes: payment.notes || ''
     })
     setShowModal(true)
@@ -208,6 +251,17 @@ export function Payments() {
     setEditingPayment(null)
   }
 
+  // Update selectedPayment when payments array changes (if it matches)
+  useEffect(() => {
+    if (selectedPayment && payments.length > 0) {
+      const updatedPayment = payments.find(p => p.id === selectedPayment.id)
+      if (updatedPayment && JSON.stringify(updatedPayment) !== JSON.stringify(selectedPayment)) {
+        setSelectedPayment(updatedPayment)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payments])
+
   const resetPackageForm = () => {
     setPackageForm({
       studentId: '',
@@ -223,13 +277,18 @@ export function Payments() {
   
   const handleEditPackage = (pkg) => {
     setEditingPackage(pkg)
+    // Format dates in local time to avoid timezone shifts
+    const purchasedDate = new Date(pkg.purchasedAt)
+    const localPurchasedAt = `${purchasedDate.getFullYear()}-${String(purchasedDate.getMonth() + 1).padStart(2, '0')}-${String(purchasedDate.getDate()).padStart(2, '0')}`
+    const expiresDate = pkg.expiresAt ? new Date(pkg.expiresAt) : null
+    const localExpiresAt = expiresDate ? `${expiresDate.getFullYear()}-${String(expiresDate.getMonth() + 1).padStart(2, '0')}-${String(expiresDate.getDate()).padStart(2, '0')}` : ''
     setPackageForm({
       studentId: pkg.studentId,
       name: pkg.name,
       totalHours: pkg.totalHours,
       price: pkg.price.toString(),
-      purchasedAt: new Date(pkg.purchasedAt).toISOString().split('T')[0],
-      expiresAt: pkg.expiresAt ? new Date(pkg.expiresAt).toISOString().split('T')[0] : '',
+      purchasedAt: localPurchasedAt,
+      expiresAt: localExpiresAt,
       method: 'venmo'
     })
     setShowPackageModal(true)
@@ -287,25 +346,41 @@ export function Payments() {
 
   const handleSubmitPackage = async (e) => {
     e.preventDefault()
+    if (isSubmittingPackage) return // Prevent double submission
+    setIsSubmittingPackage(true)
     try {
       if (editingPackage) {
         // When editing, only allow updating date, expiration, and deletion
+        // Create dates at local midnight to avoid timezone shifts
+        const [pYear, pMonth, pDay] = packageForm.purchasedAt.split('-').map(Number)
+        const localPurchasedAt = new Date(pYear, pMonth - 1, pDay, 0, 0, 0, 0)
         const submitData = {
-          purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
-          ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : { expiresAt: null })
+          purchasedAt: localPurchasedAt.toISOString(),
+          ...(packageForm.expiresAt ? (() => {
+            const [eYear, eMonth, eDay] = packageForm.expiresAt.split('-').map(Number)
+            const localExpiresAt = new Date(eYear, eMonth - 1, eDay, 0, 0, 0, 0)
+            return { expiresAt: localExpiresAt.toISOString() }
+          })() : { expiresAt: null })
         }
         
         await api.put(`/packages/${editingPackage.id}`, submitData)
         toast.success('Package updated successfully')
       } else {
         // Creating new package
+        // Create dates at local midnight to avoid timezone shifts
+        const [pYear, pMonth, pDay] = packageForm.purchasedAt.split('-').map(Number)
+        const localPurchasedAt = new Date(pYear, pMonth - 1, pDay, 0, 0, 0, 0)
         const submitData = {
           studentId: packageForm.studentId,
           name: packageForm.name,
           totalHours: parseFloat(packageForm.totalHours),
           price: parseFloat(packageForm.price),
-          purchasedAt: new Date(packageForm.purchasedAt).toISOString(),
-          ...(packageForm.expiresAt ? { expiresAt: new Date(packageForm.expiresAt).toISOString() } : {})
+          purchasedAt: localPurchasedAt.toISOString(),
+          ...(packageForm.expiresAt ? (() => {
+            const [eYear, eMonth, eDay] = packageForm.expiresAt.split('-').map(Number)
+            const localExpiresAt = new Date(eYear, eMonth - 1, eDay, 0, 0, 0, 0)
+            return { expiresAt: localExpiresAt.toISOString() }
+          })() : {})
         }
 
         // Add payment method to submit data
@@ -322,6 +397,8 @@ export function Payments() {
       resetPackageForm()
     } catch (error) {
       toast.error(error.response?.data?.message || `Failed to ${editingPackage ? 'update' : 'create'} package`)
+    } finally {
+      setIsSubmittingPackage(false)
     }
   }
 
@@ -420,7 +497,17 @@ export function Payments() {
                   return (
                     <li
                       key={payment.id}
-                      onClick={() => setSelectedPayment(payment)}
+                      onClick={async () => {
+                        // Fetch full payment details including lessons
+                        try {
+                          const { data: fullPayment } = await api.get(`/payments/${payment.id}`)
+                          setSelectedPayment(fullPayment)
+                        } catch (error) {
+                          console.error('Error fetching payment details:', error)
+                          // Fallback to payment from list if API call fails
+                          setSelectedPayment(payment)
+                        }
+                      }}
                       className={`cursor-pointer transition-colors ${isSelected ? 'bg-indigo-100 border-l-4 border-indigo-700 pl-4 pr-4 py-3' : 'hover:bg-indigo-50 p-4 pl-[17px]'}`}
                     >
                       <div className="grid grid-cols-12 gap-4 items-center">
@@ -593,6 +680,58 @@ export function Payments() {
                       {selectedPayment.notes || '-'}
                     </p>
                   </div>
+                </div>
+
+                {/* Linked Lessons */}
+                <div className="space-y-1.5 pt-2 border-t">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Linked Lessons</h3>
+                    <button
+                      onClick={async () => {
+                        await fetchLessonsForStudent(selectedPayment.studentId)
+                        setSelectedLessonId('')
+                        setShowLinkLessonModal(true)
+                      }}
+                      className="px-2 py-1 text-xs font-medium rounded-md transition-colors bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                      title="Link a lesson to this payment"
+                    >
+                      Link Lesson
+                    </button>
+                  </div>
+                  {selectedPayment.lessons && selectedPayment.lessons.length > 0 ? (
+                    <div className="space-y-2">
+                      {selectedPayment.lessons.map((lesson) => (
+                        <div key={lesson.id} className="text-sm border border-gray-200 rounded p-2 bg-gray-50">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900">
+                                {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                {lesson.subject && ` - ${lesson.subject}`}
+                              </div>
+                              <div className="text-xs text-gray-600 mt-0.5">
+                                ${lesson.price.toFixed(2)} • Paid: ${lesson.paidAmount.toFixed(2)}
+                                {lesson.isPaid && <span className="ml-1 text-green-600">(Fully Paid)</span>}
+                              </div>
+                            </div>
+                            <a
+                              href="#lessons"
+                              onClick={(e) => {
+                                e.preventDefault()
+                                window.location.href = '/lessons'
+                              }}
+                              className="text-indigo-600 hover:text-indigo-900 text-xs font-medium"
+                            >
+                              View
+                            </a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      No lessons linked to this payment
+                    </div>
+                  )}
                 </div>
               </div>
             </>
@@ -811,6 +950,7 @@ export function Payments() {
                           <div className="flex-1">
                             <select
                               required
+                              disabled={isSubmittingPackage}
                               value={packageForm.studentId}
                               onChange={(e) => {
                                 const selectedStudent = students.find(s => s.id === e.target.value)
@@ -822,7 +962,7 @@ export function Payments() {
                                   price: selectedStudent?.pricePerPackage || packageForm.price
                                 })
                               }}
-                              className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                              className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <option value="">Select student</option>
                               {students.filter(s => !s.archived && s.usePackages).map(s => (
@@ -844,9 +984,10 @@ export function Payments() {
                           <input
                             type="text"
                             required
+                            disabled={isSubmittingPackage}
                             value={packageForm.name}
                             onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
-                            className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                            className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                             placeholder="e.g., 10-Hour Package"
                           />
                         </div>
@@ -924,9 +1065,10 @@ export function Payments() {
                         <div className="flex-1">
                           <select
                             required
+                            disabled={isSubmittingPackage}
                             value={packageForm.method}
                             onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
-                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             <option value="venmo">Venmo</option>
                             <option value="zelle">Zelle</option>
@@ -943,9 +1085,10 @@ export function Payments() {
                       <input
                         type="date"
                         required
+                        disabled={isSubmittingPackage}
                         value={packageForm.purchasedAt}
                         onChange={(e) => setPackageForm({ ...packageForm, purchasedAt: e.target.value })}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                     </div>
 
@@ -954,9 +1097,10 @@ export function Payments() {
                       <label className="w-32 text-sm text-gray-600 pt-2">Expires</label>
                       <input
                         type="date"
+                        disabled={isSubmittingPackage}
                         value={packageForm.expiresAt}
                         onChange={(e) => setPackageForm({ ...packageForm, expiresAt: e.target.value })}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                     </div>
                   </div>
@@ -972,12 +1116,100 @@ export function Payments() {
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700"
+                    disabled={isSubmittingPackage}
+                    className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    Save Package
+                    {isSubmittingPackage ? 'Creating...' : editingPackage ? 'Save Package' : 'Create Package'}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Link Lesson Modal */}
+      {showLinkLessonModal && selectedPayment && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-900">Link Lesson to Payment</h3>
+                <button
+                  onClick={() => {
+                    setShowLinkLessonModal(false)
+                    setSelectedLessonId('')
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Lesson
+                  </label>
+                  <select
+                    value={selectedLessonId}
+                    onChange={(e) => setSelectedLessonId(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="">-- Select a lesson --</option>
+                    {availableLessons
+                      .filter(lesson => lesson.status !== 'cancelled' && lesson.status !== 'canceled')
+                      .map((lesson) => (
+                        <option key={lesson.id} value={lesson.id}>
+                          {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                          {lesson.subject ? ` - ${lesson.subject}` : ''}
+                          {' - $'}{lesson.price.toFixed(2)}
+                          {lesson.isPaid && ' (Already Paid)'}
+                        </option>
+                      ))}
+                  </select>
+                  {availableLessons.filter(l => l.status !== 'cancelled' && l.status !== 'canceled').length === 0 && (
+                    <p className="text-xs text-gray-500 mt-1">No lessons found for this student</p>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4">
+                  <button
+                    onClick={() => {
+                      setShowLinkLessonModal(false)
+                      setSelectedLessonId('')
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedLessonId) {
+                        toast.error('Please select a lesson')
+                        return
+                      }
+                      try {
+                        const { data: updatedPayment } = await api.patch(`/payments/${selectedPayment.id}/link-lesson`, {
+                          lessonId: selectedLessonId
+                        })
+                        setSelectedPayment(updatedPayment)
+                        await fetchPayments()
+                        setShowLinkLessonModal(false)
+                        setSelectedLessonId('')
+                        toast.success('Lesson linked to payment successfully')
+                      } catch (error) {
+                        console.error('Error linking lesson:', error)
+                        toast.error(error.response?.data?.message || 'Failed to link lesson to payment')
+                      }
+                    }}
+                    disabled={!selectedLessonId}
+                    className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Link Lesson
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

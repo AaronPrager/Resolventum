@@ -78,7 +78,7 @@ router.use(authenticateToken);
 // Get all lessons
 router.get('/', async (req, res) => {
   try {
-    const { startDate, endDate, studentId } = req.query;
+    const { startDate, endDate, studentId, month, year } = req.query;
 
     const where = { userId: req.user.id };
     if (studentId) {
@@ -90,7 +90,18 @@ router.get('/', async (req, res) => {
         where.studentId = studentId;
       }
     }
-    if (startDate && endDate) {
+    
+    // Handle month/year filtering
+    if (month && year) {
+      const m = parseInt(month);
+      const y = parseInt(year);
+      const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+      const end = new Date(y, m, 0, 23, 59, 59, 999);
+      where.dateTime = {
+        gte: start,
+        lte: end
+      };
+    } else if (startDate && endDate) {
       where.dateTime = {
         gte: new Date(startDate),
         lte: new Date(endDate)
@@ -379,6 +390,146 @@ router.post(
     }
   }
 );
+
+// Mark lesson as paid/unpaid (without creating payment record)
+router.patch('/:id/payment-status', async (req, res) => {
+  try {
+    const { isPaid } = req.body;
+
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!lesson) {
+      return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // Update payment status
+    const updateData = {
+      isPaid: Boolean(isPaid),
+      paidAmount: Boolean(isPaid) ? lesson.price : 0,
+      // Only clear payment/package links if marking as unpaid
+      ...(Boolean(isPaid) === false ? { paymentId: null, packageId: null } : {})
+    };
+
+    const updatedLesson = await prisma.lesson.update({
+      where: { id: req.params.id },
+      data: updateData,
+      include: {
+        student: true,
+        payment: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true,
+            notes: true
+          }
+        },
+        package: {
+          select: {
+            id: true,
+            name: true,
+            totalHours: true,
+            hoursUsed: true,
+            price: true,
+            purchasedAt: true,
+            expiresAt: true
+          }
+        }
+      }
+    });
+
+    res.json(updatedLesson);
+  } catch (error) {
+    console.error('Update lesson payment status error:', error);
+    res.status(500).json({ message: 'Error updating lesson payment status' });
+  }
+});
+
+// Link payment to lesson
+router.patch('/:id/link-payment', async (req, res) => {
+  try {
+    const { paymentId } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ message: 'paymentId is required' });
+    }
+
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!lesson) {
+      return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // Verify payment belongs to user and same student
+    const payment = await prisma.payment.findFirst({
+      where: { 
+        id: paymentId,
+        userId: req.user.id,
+        studentId: lesson.studentId
+      }
+    });
+
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found or does not belong to this student' });
+    }
+
+    // Calculate paid amount - use payment amount or lesson price, whichever is smaller
+    const lessonPrice = lesson.price || 0;
+    const paymentAmount = payment.amount || 0;
+    const paidAmount = Math.min(paymentAmount, lessonPrice);
+
+    // Update lesson to link to payment
+    const updatedLesson = await prisma.lesson.update({
+      where: { id: req.params.id },
+      data: {
+        paymentId: paymentId,
+        isPaid: paidAmount >= lessonPrice,
+        paidAmount: paidAmount,
+        packageId: null // Clear package link if linking to a regular payment
+      },
+      include: {
+        student: true,
+        payment: {
+          select: {
+            id: true,
+            date: true,
+            amount: true,
+            method: true,
+            notes: true
+          }
+        },
+        package: {
+          select: {
+            id: true,
+            name: true,
+            totalHours: true,
+            hoursUsed: true,
+            price: true,
+            purchasedAt: true,
+            expiresAt: true
+          }
+        }
+      }
+    });
+
+    res.json(updatedLesson);
+  } catch (error) {
+    console.error('Link payment to lesson error:', error);
+    res.status(500).json({ message: 'Error linking payment to lesson' });
+  }
+});
 
 // Update lesson
 router.put('/:id', async (req, res) => {

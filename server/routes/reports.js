@@ -478,17 +478,29 @@ router.get('/monthly-student', async (req, res) => {
     // Previous balance: billed through end of prior month minus payments through end of prior month
     const prevEnd = new Date(start.getTime() - 1);
 
+    // Count past lessons in previous balance
+    // If a lesson is on the calendar and in the past, it's billable
     const prevLessons = await prisma.lesson.findMany({
       where: {
         userId,
         studentId,
-        dateTime: { lte: prevEnd },
-        NOT: { status: { in: ['cancelled', 'canceled'] } },
-        OR: [ { status: 'completed' }, { dateTime: { lt: now } } ]
+        dateTime: { lte: prevEnd }
       },
-      select: { price: true }
+      select: { price: true, dateTime: true, status: true }
     });
-    const prevBilled = prevLessons.reduce((sum, l) => sum + (((l.price ?? 0) || fallbackPrice)), 0);
+    const prevBilled = prevLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+    
+    // Debug logging for previous balance
+    if (prevBilled > 0) {
+      console.log(`[Monthly Student Report] Previous balance calculation for ${student.firstName} ${student.lastName}:`);
+      console.log(`[Monthly Student Report] Previous lessons found: ${prevLessons.length}`);
+      console.log(`[Monthly Student Report] prevBilled: $${prevBilled.toFixed(2)}`);
+      console.log(`[Monthly Student Report] Previous lessons details:`, prevLessons.map(l => ({
+        dateTime: l.dateTime,
+        status: l.status,
+        price: l.price ?? fallbackPrice
+      })));
+    }
 
     const prevPaymentsAgg = await prisma.payment.aggregate({
       _sum: { amount: true },
@@ -497,19 +509,37 @@ router.get('/monthly-student', async (req, res) => {
     const prevPaid = prevPaymentsAgg._sum.amount || 0;
     const previousBalance = prevBilled - prevPaid;
 
-    // In-month billed (completed or past), not canceled
+    // In-month lessons
     const monthLessons = await prisma.lesson.findMany({
       where: {
         userId,
         studentId,
-        dateTime: { gte: start, lte: end },
-        NOT: { status: { in: ['cancelled', 'canceled'] } }
+        dateTime: { gte: start, lte: end }
       },
       include: { student: { select: { firstName: true, lastName: true } } }
     });
 
-    const billedLessons = monthLessons.filter(l => l.status === 'completed' || l.dateTime < now);
-    const billedThisMonth = billedLessons.reduce((sum, l) => sum + (((l.price ?? 0) || fallbackPrice)), 0);
+    // Bill lessons that are in the past
+    // If a lesson is on the calendar and its date has passed, it's billable
+    const billedLessons = monthLessons.filter(l => l.dateTime < now);
+    const billedThisMonth = billedLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+
+    // Debug logging for billing calculation
+    if (monthLessons.length > 0 || billedThisMonth > 0) {
+      console.log(`[Monthly Student Report] Student: ${student.firstName} ${student.lastName}, Month: ${m}/${y}`);
+      console.log(`[Monthly Student Report] Total lessons in month (not cancelled): ${monthLessons.length}`);
+      console.log(`[Monthly Student Report] Billed lessons (completed or past): ${billedLessons.length}`);
+      console.log(`[Monthly Student Report] billedThisMonth: $${billedThisMonth.toFixed(2)}`);
+      console.log(`[Monthly Student Report] Lesson details:`, monthLessons.map(l => ({
+        id: l.id,
+        dateTime: l.dateTime,
+        status: l.status,
+        price: l.price,
+        isPast: l.dateTime < now,
+        isCompleted: l.status === 'completed',
+        willBeBilled: l.status === 'completed' || l.dateTime < now
+      })));
+    }
 
     // All lessons in month (not canceled) for display
     const lessonsThisMonth = monthLessons; // includes past and future, statuses as-is
@@ -527,6 +557,17 @@ router.get('/monthly-student', async (req, res) => {
     const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
     const creditBalance = student.credit || 0;
 
+    // Debug logging for final result
+    if (billedThisMonth > 0 || previousBalance !== 0) {
+      console.log(`[Monthly Student Report] Final calculation for ${student.firstName} ${student.lastName}:`);
+      console.log(`[Monthly Student Report] previousBalance: $${previousBalance.toFixed(2)}`);
+      console.log(`[Monthly Student Report] billedThisMonth: $${billedThisMonth.toFixed(2)}`);
+      console.log(`[Monthly Student Report] paidThisMonth: $${paidThisMonth.toFixed(2)}`);
+      console.log(`[Monthly Student Report] endingBalance: $${endingBalance.toFixed(2)}`);
+      console.log(`[Monthly Student Report] lessonsThisMonth count: ${lessonsThisMonth.length}`);
+      console.log(`[Monthly Student Report] payments count: ${payments.length}`);
+    }
+
     res.json({
       studentName: `${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim(),
       month: m,
@@ -542,6 +583,168 @@ router.get('/monthly-student', async (req, res) => {
   } catch (error) {
     console.error('Monthly student report error:', error);
     res.status(500).json({ message: 'Failed to load monthly student report' });
+  }
+});
+
+// Monthly report for all students
+router.get('/monthly-all', async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    if (!month || !year) {
+      return res.status(400).json({ message: 'month and year are required' });
+    }
+
+    const m = parseInt(month);
+    const y = parseInt(year);
+    const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const end = new Date(y, m, 0, 23, 59, 59, 999);
+    const prevEnd = new Date(start.getTime() - 1);
+    const now = new Date();
+    const userId = req.user.id;
+
+    // First, get all lessons for this month to find which students had lessons
+    const monthLessonsForFilter = await prisma.lesson.findMany({
+      where: {
+        userId,
+        dateTime: { gte: start, lte: end }
+      },
+      select: { studentId: true }
+    });
+
+    // Extract unique student IDs who had lessons this month
+    const studentIdsWithLessons = [...new Set(monthLessonsForFilter.map(l => l.studentId))];
+
+    // If no students had lessons this month, return empty report
+    if (studentIdsWithLessons.length === 0) {
+      return res.json({
+        month: m,
+        year: y,
+        period: {
+          start: start.toISOString(),
+          end: end.toISOString()
+        },
+        totals: {
+          previousBalance: 0,
+          billedThisMonth: 0,
+          paidThisMonth: 0,
+          endingBalance: 0,
+          totalLessons: 0,
+          totalBilledLessons: 0,
+          totalPayments: 0
+        },
+        students: []
+      });
+    }
+
+    // Get only non-archived students who had lessons this month
+    const students = await prisma.student.findMany({
+      where: { 
+        userId,
+        archived: false,
+        id: { in: studentIdsWithLessons }
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        pricePerLesson: true,
+        credit: true
+      },
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }]
+    });
+
+    // Process each student
+    const studentReports = await Promise.all(
+      students.map(async (student) => {
+        const fallbackPrice = student.pricePerLesson || 0;
+
+        // Previous balance: billed through end of prior month minus payments through end of prior month
+        const prevLessons = await prisma.lesson.findMany({
+          where: {
+            userId,
+            studentId: student.id,
+            dateTime: { lte: prevEnd }
+          },
+          select: { price: true, dateTime: true, status: true }
+        });
+        const prevBilled = prevLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+
+        const prevPaymentsAgg = await prisma.payment.aggregate({
+          _sum: { amount: true },
+          where: { userId, studentId: student.id, date: { lte: prevEnd } }
+        });
+        const prevPaid = prevPaymentsAgg._sum.amount || 0;
+        const previousBalance = prevBilled - prevPaid;
+
+        // In-month lessons
+        const monthLessons = await prisma.lesson.findMany({
+          where: {
+            userId,
+            studentId: student.id,
+            dateTime: { gte: start, lte: end }
+          },
+          include: {
+            student: { select: { firstName: true, lastName: true } }
+          },
+          orderBy: { dateTime: 'asc' }
+        });
+
+        // Bill lessons that are in the past
+        const billedLessons = monthLessons.filter(l => l.dateTime < now);
+        const billedThisMonth = billedLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+
+        // Payments this month
+        const payments = await prisma.payment.findMany({
+          where: { userId, studentId: student.id, date: { gte: start, lte: end } },
+          orderBy: { date: 'desc' }
+        });
+        const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+        // Ending balance
+        const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+        const creditBalance = student.credit || 0;
+
+        return {
+          studentId: student.id,
+          studentName: `${student.firstName} ${student.lastName}`.trim(),
+          previousBalance,
+          billedThisMonth,
+          paidThisMonth,
+          endingBalance,
+          creditBalance,
+          lessonsCount: monthLessons.length,
+          billedLessonsCount: billedLessons.length,
+          paymentsCount: payments.length,
+          lessons: monthLessons,
+          payments
+        };
+      })
+    );
+
+    // Calculate totals
+    const totals = {
+      previousBalance: studentReports.reduce((sum, s) => sum + s.previousBalance, 0),
+      billedThisMonth: studentReports.reduce((sum, s) => sum + s.billedThisMonth, 0),
+      paidThisMonth: studentReports.reduce((sum, s) => sum + s.paidThisMonth, 0),
+      endingBalance: studentReports.reduce((sum, s) => sum + s.endingBalance, 0),
+      totalLessons: studentReports.reduce((sum, s) => sum + s.lessonsCount, 0),
+      totalBilledLessons: studentReports.reduce((sum, s) => sum + s.billedLessonsCount, 0),
+      totalPayments: studentReports.reduce((sum, s) => sum + s.paymentsCount, 0)
+    };
+
+    res.json({
+      month: m,
+      year: y,
+      period: {
+        start: start.toISOString(),
+        end: end.toISOString()
+      },
+      totals,
+      students: studentReports
+    });
+  } catch (error) {
+    console.error('Monthly all students report error:', error);
+    res.status(500).json({ message: 'Failed to load monthly report for all students' });
   }
 });
 
@@ -577,16 +780,42 @@ router.get('/packages', async (req, res) => {
       orderBy: { purchasedAt: 'desc' }
     });
 
-    // Enrich packages with calculated fields
-    const enrichedPackages = packages.map(pkg => {
-      const hoursRemaining = pkg.totalHours - pkg.hoursUsed;
+    // Enrich packages with calculated fields, recalculating hoursUsed from actual linked lessons
+    const enrichedPackages = await Promise.all(packages.map(async (pkg) => {
+      // Recalculate hoursUsed from actual linked lessons
+      const linkedLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          packageId: pkg.id
+        },
+        select: {
+          duration: true
+        }
+      });
+
+      // Calculate actual hours used from linked lessons
+      const actualHoursUsed = linkedLessons.reduce((sum, lesson) => {
+        return sum + (lesson.duration || 0) / 60; // Convert minutes to hours
+      }, 0);
+
+      // Sync hoursUsed back to database if it differs (fix inconsistencies)
+      if (Math.abs((pkg.hoursUsed || 0) - actualHoursUsed) > 0.01) {
+        console.log(`[Package Report] Syncing hoursUsed for package ${pkg.id}: ${pkg.hoursUsed} -> ${actualHoursUsed.toFixed(2)}`);
+        await prisma.package.update({
+          where: { id: pkg.id },
+          data: { hoursUsed: actualHoursUsed }
+        });
+      }
+
+      const hoursRemaining = pkg.totalHours - actualHoursUsed;
       const packageHourlyRate = pkg.price / pkg.totalHours;
-      const utilizationPercent = pkg.totalHours > 0 ? (pkg.hoursUsed / pkg.totalHours) * 100 : 0;
+      const utilizationPercent = pkg.totalHours > 0 ? (actualHoursUsed / pkg.totalHours) * 100 : 0;
       const isExpired = pkg.expiresAt ? new Date(pkg.expiresAt) < new Date() : false;
       const isFullyUsed = hoursRemaining <= 0;
 
       return {
         ...pkg,
+        hoursUsed: actualHoursUsed, // Use recalculated value
         hoursRemaining,
         packageHourlyRate,
         utilizationPercent,
@@ -600,7 +829,7 @@ router.get('/packages', async (req, res) => {
               ? 'Expired' 
               : 'Active'
       };
-    });
+    }));
 
     // Calculate summary statistics
     const activePackages = enrichedPackages.filter(p => p.isActive && !p.isFullyUsed && !p.isExpired);
