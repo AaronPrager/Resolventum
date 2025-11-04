@@ -200,6 +200,23 @@ export function Calendar() {
     }
   }, [])
 
+  // Scroll selected lesson into view when it changes (without changing order)
+  useEffect(() => {
+    if (selectedLesson) {
+      // Use setTimeout to ensure DOM has updated
+      setTimeout(() => {
+        const selectedElement = document.getElementById('selected-lesson')
+        if (selectedElement) {
+          selectedElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'nearest'
+          })
+        }
+      }, 100)
+    }
+  }, [selectedLesson])
+
   const fetchLessons = async () => {
     try {
       const { data } = await api.get('/lessons')
@@ -334,6 +351,62 @@ export function Calendar() {
       if (selectedLesson) {
         // Editing existing lesson from details panel
         if (selectedLesson.isRecurring && selectedLesson.recurringGroupId) {
+          // Check if series-level properties changed (start date, end date, or frequency)
+          // If so, automatically apply to whole series without confirmation
+          
+          // Compare start date/time
+          const originalDate = new Date(selectedLesson.dateTime)
+          const newDate = new Date(formData.dateTime)
+          
+          const originalYear = originalDate.getFullYear()
+          const originalMonth = originalDate.getMonth()
+          const originalDay = originalDate.getDate()
+          const originalHour = originalDate.getHours()
+          const originalMinute = originalDate.getMinutes()
+          
+          const newYear = newDate.getFullYear()
+          const newMonth = newDate.getMonth()
+          const newDay = newDate.getDate()
+          const newHour = newDate.getHours()
+          const newMinute = newDate.getMinutes()
+          
+          const dateChanged = (
+            originalYear !== newYear ||
+            originalMonth !== newMonth ||
+            originalDay !== newDay ||
+            originalHour !== newHour ||
+            originalMinute !== newMinute
+          )
+          
+          // Compare end date (just the date part, ignore time)
+          const originalEndDate = selectedLesson.recurringEndDate 
+            ? new Date(selectedLesson.recurringEndDate).toISOString().split('T')[0] 
+            : ''
+          // formData.recurringEndDate might have time component (T23:59:59), extract just date
+          let newEndDateStr = ''
+          if (formData.recurringEndDate) {
+            // Remove time component if present
+            newEndDateStr = formData.recurringEndDate.includes('T') 
+              ? formData.recurringEndDate.split('T')[0] 
+              : formData.recurringEndDate
+            // Ensure it's in YYYY-MM-DD format (remove any trailing characters)
+            newEndDateStr = newEndDateStr.substring(0, 10)
+          }
+          const endDateChanged = originalEndDate !== newEndDateStr
+          
+          // Compare frequency
+          const originalFrequency = selectedLesson.recurringFrequency || 'weekly'
+          const newFrequency = formData.recurringFrequency || 'weekly'
+          const frequencyChanged = originalFrequency !== newFrequency
+          
+          // If any series-level property changed, automatically update whole series
+          if (dateChanged || endDateChanged || frequencyChanged) {
+            // Call executeSave with 'future' scope to update whole series
+            await executeSave('future')
+            return
+          }
+          
+          // Otherwise, show options for other changes (subject, price, notes, etc.)
           setRecurringAction('save')
           setShowRecurringOptions(true)
         } else {
@@ -662,7 +735,8 @@ export function Calendar() {
     // Handle both calendar events (event.resource) and direct lesson objects (event.lesson or just event)
     const lesson = event.resource || event.lesson || event
     setSelectedLesson(lesson)
-    setShowDetails(true)
+    // Don't show details card - just open the edit modal
+    setShowDetails(false)
     
     // Populate formData for editing
     const lessonDate = new Date(lesson.dateTime)
@@ -697,6 +771,7 @@ export function Calendar() {
       allDay: lesson.allDay || false
     })
     
+    setIsEditing(true)
     setShowModal(true)
   }
 
@@ -804,15 +879,16 @@ export function Calendar() {
   // Get lessons for the current view period
   const getViewLessons = () => {
     const current = new Date(currentDate)
+    let filteredLessons = []
     
     if (currentView === 'day') {
       // Filter lessons for the current day
-      return lessons.filter(lesson => {
+      filteredLessons = lessons.filter(lesson => {
         const lessonDate = new Date(lesson.dateTime)
         return lessonDate.getDate() === current.getDate() &&
                lessonDate.getMonth() === current.getMonth() &&
                lessonDate.getFullYear() === current.getFullYear()
-      }).sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+      })
     } else if (currentView === 'week') {
       // Filter lessons for the current week
       const startOfWeek = new Date(current)
@@ -825,18 +901,25 @@ export function Calendar() {
       endOfWeek.setDate(startOfWeek.getDate() + 6)
       endOfWeek.setHours(23, 59, 59, 999)
       
-      return lessons.filter(lesson => {
+      filteredLessons = lessons.filter(lesson => {
         const lessonDate = new Date(lesson.dateTime)
         return lessonDate >= startOfWeek && lessonDate <= endOfWeek
-      }).sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+      })
     } else {
       // Filter lessons for the current month (default for month view)
-      return lessons.filter(lesson => {
+      filteredLessons = lessons.filter(lesson => {
         const lessonDate = new Date(lesson.dateTime)
         return lessonDate.getMonth() === current.getMonth() &&
                lessonDate.getFullYear() === current.getFullYear()
-      }).sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+      })
     }
+    
+    // Sort by date/time - keep chronological order
+    filteredLessons.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+    
+    // Don't change the order - just return the sorted list
+    // The selected lesson will be highlighted via the isSelected check in the render
+    return filteredLessons
   }
   
   const currentViewLessons = getViewLessons()
@@ -862,7 +945,8 @@ export function Calendar() {
               onSelectEvent={(event) => {
                 const lesson = event.resource || event.lesson || event
                 setSelectedLesson(lesson)
-                setShowDetails(true)
+                // Don't show details card - just update the list
+                setShowDetails(false)
               }}
               onDoubleClickEvent={handleSelectEvent}
               onSelectSlot={handleSelectSlot}
@@ -931,9 +1015,11 @@ export function Calendar() {
                   return (
                     <li
                       key={lesson.id}
+                      id={isSelected ? 'selected-lesson' : undefined}
                       onClick={() => {
                         setSelectedLesson(lesson)
-                        setShowDetails(true)
+                        // Don't show details card - just highlight in list
+                        setShowDetails(false)
                       }}
                       onDoubleClick={() => handleSelectEvent({ lesson })}
                       className={`cursor-pointer transition-colors ${

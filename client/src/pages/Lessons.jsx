@@ -334,19 +334,138 @@ export function Lessons() {
     // Only include optional fields if they have values
     if (formData.notes) submitData.notes = formData.notes
     if (formData.locationType === 'remote' && formData.link) submitData.link = formData.link
+    
+    // Add recurring data to submitData if it's a recurring lesson
     if (formData.isRecurring) {
       submitData.isRecurring = true
       submitData.recurringFrequency = formData.recurringFrequency
-      submitData.recurringEndDate = new Date(formData.recurringEndDate).toISOString()
+      if (formData.recurringEndDate) {
+        // Parse date string (YYYY-MM-DD) and create date in local timezone
+        const [year, month, day] = formData.recurringEndDate.split('-').map(Number)
+        const endDate = new Date(year, month - 1, day, 23, 59, 59, 999)
+        submitData.recurringEndDate = endDate.toISOString()
+      } else {
+        submitData.recurringEndDate = null
+      }
     }
-
+    
     try {
       if (isEditing && selectedLesson) {
+        console.log('[Lesson Edit] handleSubmit called:', {
+          isEditing,
+          selectedLessonId: selectedLesson?.id,
+          isRecurring: selectedLesson?.isRecurring,
+          formDataIsRecurring: formData.isRecurring,
+          formDataRecurringEndDate: formData.recurringEndDate,
+          selectedLessonRecurringEndDate: selectedLesson.recurringEndDate
+        })
+        
         // Check if lesson is recurring
         if (selectedLesson.isRecurring && formData.isRecurring) {
-          // Editing a recurring lesson - show options
+          console.log('[Lesson Edit] Entering recurring lesson check')
+          // Check if series-level properties are changing (start date, end date, or frequency)
+          // If so, automatically apply to whole series without showing options
+          
+          // Compare dates - formData.dateTime is in format "YYYY-MM-DDTHH:mm" (local time)
+          // selectedLesson.dateTime is an ISO string from the database (UTC)
+          // We need to compare them properly accounting for timezone
+          
+          // Parse formData.dateTime as local time components
+          const formDateTimeParts = formData.dateTime.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/)
+          let originalDate, newDate
+          
+          if (formDateTimeParts) {
+            // Parse as local time: year, month (0-indexed), day, hour, minute
+            const [, year, month, day, hour, minute] = formDateTimeParts.map(Number)
+            newDate = new Date(year, month - 1, day, hour, minute, 0, 0)
+          } else {
+            // Fallback to regular parsing
+            newDate = new Date(formData.dateTime)
+          }
+          
+          // Parse selectedLesson.dateTime (ISO string, UTC)
+          originalDate = new Date(selectedLesson.dateTime)
+          
+          // Convert both to local time for comparison
+          // Extract local date/time components for comparison
+          const originalYear = originalDate.getFullYear()
+          const originalMonth = originalDate.getMonth()
+          const originalDay = originalDate.getDate()
+          const originalHour = originalDate.getHours()
+          const originalMinute = originalDate.getMinutes()
+          
+          const newYear = newDate.getFullYear()
+          const newMonth = newDate.getMonth()
+          const newDay = newDate.getDate()
+          const newHour = newDate.getHours()
+          const newMinute = newDate.getMinutes()
+          
+          // Compare date/time components
+          const dateChanged = (
+            originalYear !== newYear ||
+            originalMonth !== newMonth ||
+            originalDay !== newDay ||
+            originalHour !== newHour ||
+            originalMinute !== newMinute
+          )
+          
+          console.log('[Lesson Edit] Date comparison:', {
+            original: `${originalYear}-${String(originalMonth + 1).padStart(2, '0')}-${String(originalDay).padStart(2, '0')} ${String(originalHour).padStart(2, '0')}:${String(originalMinute).padStart(2, '0')}`,
+            new: `${newYear}-${String(newMonth + 1).padStart(2, '0')}-${String(newDay).padStart(2, '0')} ${String(newHour).padStart(2, '0')}:${String(newMinute).padStart(2, '0')}`,
+            dateChanged
+          })
+          
+          // Normalize end dates for comparison (just the date part, ignore time)
+          const originalEndDate = selectedLesson.recurringEndDate 
+            ? new Date(selectedLesson.recurringEndDate).toISOString().split('T')[0] 
+            : ''
+          // formData.recurringEndDate should be just the date part, but handle edge cases
+          let newEndDateStr = ''
+          if (formData.recurringEndDate) {
+            // Remove time component if present
+            newEndDateStr = formData.recurringEndDate.includes('T') 
+              ? formData.recurringEndDate.split('T')[0] 
+              : formData.recurringEndDate
+            // Ensure it's in YYYY-MM-DD format (remove any trailing characters)
+            newEndDateStr = newEndDateStr.substring(0, 10)
+          }
+          const endDateChanged = originalEndDate !== newEndDateStr
+          
+          console.log('[Lesson Edit] End date comparison:', {
+            originalEndDate,
+            newEndDateStr,
+            endDateChanged,
+            selectedLessonRecurringEndDate: selectedLesson.recurringEndDate,
+            formDataRecurringEndDate: formData.recurringEndDate
+          })
+          
+          const originalFrequency = selectedLesson.recurringFrequency || 'weekly'
+          const newFrequency = formData.recurringFrequency || 'weekly'
+          const frequencyChanged = originalFrequency !== newFrequency
+          
+          console.log('[Lesson Edit] Series property check summary:', {
+            dateChanged,
+            endDateChanged,
+            frequencyChanged,
+            willAutoApply: dateChanged || endDateChanged || frequencyChanged
+          })
+          
+          // If any series-level property changed, automatically update whole series
+          // Do NOT show the modal - just apply directly to the whole series
+          if (dateChanged || endDateChanged || frequencyChanged) {
+            console.log('[Lesson Edit] Series-level property changed, applying to whole series automatically - NO MODAL')
+            // submitData already has recurring info from above
+            // Call executeSave directly with updateAll=true
+            await executeSave(true)
+            return
+          }
+          
+          // Otherwise, show options for other changes (subject, price, notes, etc.)
+          // submitData already has recurring info from above
+          console.log('[Lesson Edit] No series-level changes, showing modal for other changes')
           setRecurringAction('save')
           setShowRecurringOptions(true)
+          return // Return here to prevent further execution
         } else if (selectedLesson.isRecurring && !formData.isRecurring) {
           // Converting recurring to single
           const { data: updatedLesson } = await api.put(`/lessons/${selectedLesson.id}`, submitData)
@@ -421,9 +540,11 @@ export function Lessons() {
     if (formData.isRecurring) {
       submitData.recurringFrequency = formData.recurringFrequency
       if (formData.recurringEndDate) {
-        // Set to end of day (23:59:59.999) to ensure inclusive end date
-        const endDate = new Date(formData.recurringEndDate)
-        endDate.setHours(23, 59, 59, 999)
+        // Parse date string (YYYY-MM-DD) and create date in local timezone
+        // This ensures Sept 30 means Sept 30, not Sept 29 due to timezone conversion
+        const [year, month, day] = formData.recurringEndDate.split('-').map(Number)
+        // Create date at end of day (23:59:59.999) in local timezone
+        const endDate = new Date(year, month - 1, day, 23, 59, 59, 999)
         submitData.recurringEndDate = endDate.toISOString()
       } else if (endRepeatType === 'schoolYear') {
         // Calculate end of school year if not already set

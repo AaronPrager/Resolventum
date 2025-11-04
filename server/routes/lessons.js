@@ -9,24 +9,45 @@ const router = express.Router();
 // Helper function to calculate recurring lesson dates
 // endDate should be inclusive - lessons are created up to and including the end date
 // All dates are handled in local timezone
+// endDate can be a Date object or ISO string - we extract the intended date from it
 function calculateRecurringDates(startDate, frequency, endDate) {
   const dates = [];
   let currentDate = new Date(startDate);
-  let end = new Date(endDate);
   
-  // Extract the date components from the end date (ignore time component)
-  // This ensures we compare dates correctly regardless of timezone
-  const endYear = end.getUTCFullYear();
-  const endMonth = end.getUTCMonth();
-  const endDay = end.getUTCDate();
+  // Handle endDate - extract the intended date in local timezone
+  let endYear, endMonth, endDay;
   
-  // Create a proper end date at end of day in UTC, then convert to local
-  // This ensures Nov 13 means Nov 13, not Nov 12
-  end = new Date(Date.UTC(endYear, endMonth, endDay, 23, 59, 59, 999));
+  if (typeof endDate === 'string') {
+    // If it's an ISO string, extract the date part (YYYY-MM-DD)
+    // This avoids timezone conversion issues
+    const isoString = endDate;
+    const datePart = isoString.split('T')[0]; // "2025-09-30"
+    const parts = datePart.split('-');
+    endYear = parseInt(parts[0], 10);
+    endMonth = parseInt(parts[1], 10) - 1; // Month is 0-indexed
+    endDay = parseInt(parts[2], 10);
+    console.log('[calculateRecurringDates] Extracted from ISO string:', datePart, '->', endYear, endMonth + 1, endDay);
+  } else {
+    // If it's a Date object, extract local date components
+    const endTemp = new Date(endDate);
+    endYear = endTemp.getFullYear();
+    endMonth = endTemp.getMonth();
+    endDay = endTemp.getDate();
+    console.log('[calculateRecurringDates] Extracted from Date object:', endYear, endMonth + 1, endDay);
+  }
   
-  // Helper to get date-only string for comparison (YYYY-MM-DD)
+  // Create end date at end of day in local timezone
+  // Use the Date constructor with local timezone parameters
+  const end = new Date(endYear, endMonth, endDay, 23, 59, 59, 999);
+  console.log('[calculateRecurringDates] Created end date:', end.toISOString(), 'Local:', endYear, endMonth + 1, endDay, '23:59:59.999');
+  console.log('[calculateRecurringDates] End date getFullYear/getMonth/getDate:', end.getFullYear(), end.getMonth() + 1, end.getDate());
+  
+  // Helper to get date-only string for comparison (YYYY-MM-DD) using local timezone
   const getDateOnly = (date) => {
-    return date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
   
   // Helper to compare dates by date only (ignoring time)
@@ -37,7 +58,9 @@ function calculateRecurringDates(startDate, frequency, endDate) {
   };
   
   // Debug: log what we're working with
-  console.log('[calculateRecurringDates] Start:', currentDate.toISOString(), 'End:', end.toISOString(), 'Frequency:', frequency);
+  console.log('[calculateRecurringDates] Start:', currentDate.toISOString(), 'End received:', typeof endDate === 'string' ? endDate : (endDate instanceof Date ? endDate.toISOString() : String(endDate)));
+  console.log('[calculateRecurringDates] Extracted date components:', endYear, endMonth + 1, endDay);
+  console.log('[calculateRecurringDates] Created end Date object - ISO:', end.toISOString(), 'Local components:', end.getFullYear(), end.getMonth() + 1, end.getDate());
   console.log('[calculateRecurringDates] Start date only:', getDateOnly(currentDate), 'End date only:', getDateOnly(end));
   
   // Add dates until we exceed the end date
@@ -261,10 +284,12 @@ router.post(
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
         const recurringGroupId = uuidv4();
-        // Frontend sends end date with time set to end of day
-        // calculateRecurringDates will normalize it to ensure inclusivity
-        const endDateWithTime = new Date(recurringEndDate);
-        const dates = calculateRecurringDates(dateTime, recurringFrequency, endDateWithTime);
+        // Frontend sends end date as ISO string (UTC), but we need to extract the intended local date
+        // Pass the ISO string directly to calculateRecurringDates, which will extract the date part
+        // This avoids timezone conversion issues when creating Date objects
+        console.log(`[Create Lesson] Recurring end date received: ${recurringEndDate}`);
+        const dates = calculateRecurringDates(dateTime, recurringFrequency, recurringEndDate);
+        console.log(`[Create Lesson] Generated ${dates.length} recurring dates. Last date: ${dates[dates.length - 1]?.toISOString()}`);
         
         // Initial lesson data with prices - will be updated based on packages
         const lessonsData = dates.map(date => ({
@@ -1136,9 +1161,13 @@ router.put('/:id/recurring-future', async (req, res) => {
     );
     
     if (endDateChanged) {
-      const newEndDate = new Date(recurringEndDate);
-      // Ensure end date is inclusive (end of day)
-      newEndDate.setHours(23, 59, 59, 999);
+      // Parse the ISO string to extract the date part, then create in local timezone
+      // This ensures we get the correct date regardless of timezone
+      const isoString = typeof recurringEndDate === 'string' ? recurringEndDate : new Date(recurringEndDate).toISOString();
+      const datePart = isoString.split('T')[0]; // "2025-09-30"
+      const [year, month, day] = datePart.split('-').map(Number);
+      // Create end date at end of day in LOCAL timezone
+      const newEndDate = new Date(year, month - 1, day, 23, 59, 59, 999);
       const currentEndDate = lesson.recurringEndDate ? new Date(lesson.recurringEndDate) : null;
       if (currentEndDate) {
         currentEndDate.setHours(23, 59, 59, 999);
