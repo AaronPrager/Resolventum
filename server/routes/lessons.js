@@ -112,12 +112,16 @@ router.get('/', async (req, res) => {
       where,
       include: {
         student: true,
-        payment: {
-          select: {
-            id: true,
-            date: true,
-            amount: true,
-            method: true
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true
+              }
+            }
           }
         },
         package: {
@@ -148,13 +152,17 @@ router.get('/:id', async (req, res) => {
       },
       include: {
         student: true,
-        payment: {
-          select: {
-            id: true,
-            date: true,
-            amount: true,
-            method: true,
-            notes: true
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true,
+                notes: true
+              }
+            }
           }
         },
         package: {
@@ -227,11 +235,28 @@ router.post(
         return res.status(404).json({ message: 'Student not found' });
       }
 
-      // Calculate price based on student's hourly rate
+      // Calculate price: prioritize price from request if provided, otherwise calculate from student's hourly rate
       // The student's pricePerLesson is already set to package rate if a package was purchased
       const hourlyRate = student.pricePerLesson || 0;
       const lessonHours = duration / 60; // Convert minutes to hours
-      const finalPrice = hourlyRate > 0 ? (hourlyRate * lessonHours) : (price || 0);
+      let finalPrice;
+      
+      // Parse price from request, handling NaN and undefined
+      const parsedPrice = price !== undefined && price !== null ? parseFloat(price) : NaN;
+      const isValidPrice = !isNaN(parsedPrice) && parsedPrice > 0;
+      
+      if (isValidPrice) {
+        // Use price from request if explicitly provided and valid
+        finalPrice = parsedPrice;
+      } else if (hourlyRate > 0) {
+        // Calculate from hourly rate if no valid price provided
+        finalPrice = hourlyRate * lessonHours;
+      } else {
+        // Default to 0 if neither price nor hourly rate available
+        finalPrice = 0;
+      }
+      
+      console.log(`[Create Lesson] Student: ${student.firstName} ${student.lastName} (ID: ${student.id}), pricePerLesson: ${student.pricePerLesson}, duration: ${duration}min, price from request: ${price} (parsed: ${parsedPrice}, valid: ${isValidPrice}), finalPrice: ${finalPrice}`);
 
       // If it's a recurring lesson, create multiple lessons
       if (isRecurring && recurringFrequency && recurringEndDate) {
@@ -262,11 +287,10 @@ router.post(
           allDay: allDay || false
         }));
 
-        // Update all lesson prices using student's current hourly rate
-        // (which is set to package rate if a package was purchased)
+        // Use the same finalPrice for all recurring lessons (already calculated above)
+        // This preserves the price from the request if provided, or uses calculated price from hourly rate
         for (let i = 0; i < lessonsData.length; i++) {
-          const lessonHours = lessonsData[i].duration / 60;
-          lessonsData[i].price = hourlyRate > 0 ? (hourlyRate * lessonsData[i].duration) / 60 : finalPrice;
+          lessonsData[i].price = finalPrice;
         }
 
         const lessons = await prisma.lesson.createMany({
@@ -409,11 +433,18 @@ router.patch('/:id/payment-status', async (req, res) => {
     }
 
     // Update payment status
+    if (Boolean(isPaid) === false) {
+      // Marking as unpaid - delete all LessonPayment records
+      await prisma.lessonPayment.deleteMany({
+        where: { lessonId: req.params.id }
+      });
+    }
+
     const updateData = {
       isPaid: Boolean(isPaid),
       paidAmount: Boolean(isPaid) ? lesson.price : 0,
-      // Only clear payment/package links if marking as unpaid
-      ...(Boolean(isPaid) === false ? { paymentId: null, packageId: null } : {})
+      // Only clear package link if marking as unpaid
+      ...(Boolean(isPaid) === false ? { packageId: null } : {})
     };
 
     const updatedLesson = await prisma.lesson.update({
@@ -421,13 +452,17 @@ router.patch('/:id/payment-status', async (req, res) => {
       data: updateData,
       include: {
         student: true,
-        payment: {
-          select: {
-            id: true,
-            date: true,
-            amount: true,
-            method: true,
-            notes: true
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true,
+                notes: true
+              }
+            }
           }
         },
         package: {
@@ -485,29 +520,59 @@ router.patch('/:id/link-payment', async (req, res) => {
       return res.status(404).json({ message: 'Payment not found or does not belong to this student' });
     }
 
-    // Calculate paid amount - use payment amount or lesson price, whichever is smaller
+    // Calculate paid amount - use payment amount or remaining lesson price, whichever is smaller
     const lessonPrice = lesson.price || 0;
+    const currentPaidAmount = lesson.paidAmount || 0;
+    const remainingNeeded = lessonPrice - currentPaidAmount;
     const paymentAmount = payment.amount || 0;
-    const paidAmount = Math.min(paymentAmount, lessonPrice);
+    const amountToApply = Math.min(paymentAmount, remainingNeeded);
 
-    // Update lesson to link to payment
+    // Create or update LessonPayment record
+    await prisma.lessonPayment.upsert({
+      where: {
+        lessonId_paymentId: {
+          lessonId: req.params.id,
+          paymentId: paymentId
+        }
+      },
+      update: {
+        amount: amountToApply
+      },
+      create: {
+        lessonId: req.params.id,
+        paymentId: paymentId,
+        amount: amountToApply
+      }
+    });
+
+    // Recalculate total paidAmount from all LessonPayment records for this lesson
+    const allLessonPayments = await prisma.lessonPayment.findMany({
+      where: { lessonId: req.params.id },
+      select: { amount: true }
+    });
+    const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+
+    // Update lesson payment status
     const updatedLesson = await prisma.lesson.update({
       where: { id: req.params.id },
       data: {
-        paymentId: paymentId,
-        isPaid: paidAmount >= lessonPrice,
-        paidAmount: paidAmount,
+        isPaid: totalPaidAmount >= lessonPrice,
+        paidAmount: totalPaidAmount,
         packageId: null // Clear package link if linking to a regular payment
       },
       include: {
         student: true,
-        payment: {
-          select: {
-            id: true,
-            date: true,
-            amount: true,
-            method: true,
-            notes: true
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true,
+                notes: true
+              }
+            }
           }
         },
         package: {

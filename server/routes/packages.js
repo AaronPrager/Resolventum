@@ -97,15 +97,23 @@ router.post(
         }
       });
 
-      console.log(`[Package Creation] Payment created: ${payment.id} for $${payment.amount}`);
+      console.log(`[Package Creation] Payment created: ${payment.id} for $${payment.amount} on ${payment.date.toISOString()}`);
 
       // Then create the package linked to the payment
-      // Extract only fields that belong to Package model (exclude method which is for Payment)
-      const { method, ...packageData } = req.body;
+      // Extract only fields that belong to Package model (exclude method and purchasedAt)
+      // purchasedAt must be explicitly set to match the payment date (not using default)
+      const { method, purchasedAt: reqPurchasedAt, ...packageData } = req.body;
+      
+      // Use the payment date as the source of truth for purchasedAt to ensure they match
+      // This prevents timezone or parsing issues between the form and database
+      const purchasedAt = payment.date;
+      
+      console.log(`[Package Creation] Setting purchasedAt to payment date: ${purchasedAt.toISOString()} (from request: ${reqPurchasedAt})`);
       
       const pkg = await prisma.package.create({
         data: {
           ...packageData,
+          purchasedAt: purchasedAt, // Use payment date to ensure consistency
           userId: req.user.id,
           paymentId: payment.id, // Link package to payment
           isActive: req.body.isActive !== undefined ? req.body.isActive : true // Default to active
@@ -223,13 +231,34 @@ router.post(
         if (availableAmount >= remainingNeeded) {
           // Full payment for this lesson - mark as paid and link to package and payment
           const lessonHours = lesson.duration / 60; // Convert minutes to hours
+          const amountToApply = remainingNeeded;
+          
+          // Create or update LessonPayment record if package payment exists
+          if (pkg.paymentId) {
+            await prisma.lessonPayment.upsert({
+              where: {
+                lessonId_paymentId: {
+                  lessonId: lesson.id,
+                  paymentId: pkg.paymentId
+                }
+              },
+              update: {
+                amount: amountToApply
+              },
+              create: {
+                lessonId: lesson.id,
+                paymentId: pkg.paymentId,
+                amount: amountToApply
+              }
+            });
+          }
+          
           await prisma.lesson.update({
             where: { id: lesson.id },
             data: { 
               isPaid: true,
               paidAmount: lessonPrice,
-              packageId: pkg.id, // Link lesson to package
-              paymentId: pkg.paymentId // Link lesson to the package payment
+              packageId: pkg.id // Link lesson to package
             }
           });
           
@@ -244,14 +273,35 @@ router.post(
         } else {
           // Partial payment - mark as partially paid and link to package and payment
           const lessonHours = lesson.duration / 60; // Convert minutes to hours
+          const amountToApply = availableAmount;
           const newPaidAmount = currentPaidAmount + availableAmount;
+          
+          // Create or update LessonPayment record if package payment exists
+          if (pkg.paymentId) {
+            await prisma.lessonPayment.upsert({
+              where: {
+                lessonId_paymentId: {
+                  lessonId: lesson.id,
+                  paymentId: pkg.paymentId
+                }
+              },
+              update: {
+                amount: amountToApply
+              },
+              create: {
+                lessonId: lesson.id,
+                paymentId: pkg.paymentId,
+                amount: amountToApply
+              }
+            });
+          }
+          
           await prisma.lesson.update({
             where: { id: lesson.id },
             data: { 
               isPaid: false,
               paidAmount: newPaidAmount,
-              packageId: pkg.id, // Link lesson to package (even if partially paid)
-              paymentId: pkg.paymentId // Link lesson to the package payment
+              packageId: pkg.id // Link lesson to package (even if partially paid)
             }
           });
           
@@ -331,7 +381,33 @@ router.put('/:id', async (req, res) => {
     // Only allow updating purchasedAt and expiresAt
     const updateData = {};
     if (req.body.purchasedAt) {
-      updateData.purchasedAt = new Date(req.body.purchasedAt);
+      // If package has a linked payment, use payment date as source of truth
+      // This ensures package and payment dates stay in sync
+      if (existing.paymentId) {
+        const payment = await prisma.payment.findUnique({
+          where: { id: existing.paymentId },
+          select: { date: true }
+        });
+        if (payment) {
+          // Use payment date instead of form date to ensure consistency
+          updateData.purchasedAt = payment.date;
+          console.log(`[Package Update] Syncing package purchasedAt to payment date: ${payment.date.toISOString()}`);
+          console.log(`[Package Update] Form date was: ${req.body.purchasedAt}, but using payment date instead`);
+        } else {
+          // Payment not found, use form date
+          const purchasedAtDate = new Date(req.body.purchasedAt);
+          updateData.purchasedAt = purchasedAtDate;
+          console.log(`[Package Update] No linked payment found, using form date: ${purchasedAtDate.toISOString()}`);
+        }
+      } else {
+        // No payment linked, use form date
+        const purchasedAtDate = new Date(req.body.purchasedAt);
+        updateData.purchasedAt = purchasedAtDate;
+        console.log(`[Package Update] No payment linked, using form date: ${purchasedAtDate.toISOString()}`);
+      }
+      console.log(`[Package Update] Updating purchasedAt for package ${req.params.id}:`);
+      console.log(`  Current value: ${existing.purchasedAt.toISOString()}`);
+      console.log(`  New value: ${updateData.purchasedAt.toISOString()}`);
     }
     if (req.body.expiresAt !== undefined) {
       updateData.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
@@ -344,6 +420,11 @@ router.put('/:id', async (req, res) => {
       });
     }
 
+    // Only update if there's actually data to update
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: 'No valid fields to update' });
+    }
+
     const pkg = await prisma.package.update({
       where: { id: req.params.id },
       data: updateData,
@@ -351,6 +432,9 @@ router.put('/:id', async (req, res) => {
         student: true
       }
     });
+
+    console.log(`[Package Update] Package updated successfully:`);
+    console.log(`  New purchasedAt: ${pkg.purchasedAt.toISOString()}`);
 
     res.json(pkg);
   } catch (error) {

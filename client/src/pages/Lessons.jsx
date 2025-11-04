@@ -145,6 +145,21 @@ export function Lessons() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedMonth, selectedYear, selectedStudentFilter])
 
+  // Recalculate price when student or duration changes
+  useEffect(() => {
+    if (formData.studentId && formData.dateTime && formData.endDateTime && !isEditing) {
+      const durationMinutes = Math.round((new Date(formData.endDateTime) - new Date(formData.dateTime)) / 60000)
+      if (durationMinutes > 0) {
+        const calculatedPrice = calculatePrice(formData.studentId, durationMinutes)
+        // Only update if price is different to avoid infinite loops
+        if (Math.abs(formData.price - calculatedPrice) > 0.01) {
+          setFormData(prev => ({ ...prev, price: calculatedPrice }))
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.studentId, formData.dateTime, formData.endDateTime, students])
+
   const fetchLessons = async () => {
     try {
       const params = {}
@@ -176,9 +191,13 @@ export function Lessons() {
     // Only apply client-side filters here (unpaid, past)
     let filteredLessons = lessonsData
     
-    // Filter by unpaid only if enabled
+    // Filter by unpaid only if enabled (exclude fully paid and partially paid)
     if (showUnpaidOnly) {
-      filteredLessons = filteredLessons.filter(lesson => !lesson.isPaid)
+      filteredLessons = filteredLessons.filter(lesson => {
+        const paidAmount = lesson.paidAmount || 0;
+        const price = lesson.price || 0;
+        return !lesson.isPaid && paidAmount === 0;
+      })
     }
     
     // Filter by past lessons only if enabled
@@ -789,13 +808,30 @@ export function Lessons() {
                         
                         {/* Paid Column */}
                         <div className="col-span-2">
-                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            lesson.isPaid 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-red-100 text-red-800'
-                          }`}>
-                            {lesson.isPaid ? 'Paid' : 'Unpaid'}
-                          </span>
+                          {(() => {
+                            const isFullyPaid = lesson.isPaid;
+                            const isPartiallyPaid = !isFullyPaid && (lesson.paidAmount || 0) > 0 && (lesson.paidAmount || 0) < (lesson.price || 0);
+                            
+                            if (isFullyPaid) {
+                              return (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  Paid
+                                </span>
+                              );
+                            } else if (isPartiallyPaid) {
+                              return (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                  Partially Paid
+                                </span>
+                              );
+                            } else {
+                              return (
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                                  Unpaid
+                                </span>
+                              );
+                            }
+                          })()}
                         </div>
                       </div>
                     </li>
@@ -993,27 +1029,30 @@ export function Lessons() {
                             Purchased: {new Date(selectedLesson.package.purchasedAt).toLocaleDateString()}
                           </div>
                         </div>
-                      ) : selectedLesson.payment ? (
-                        <div className="mt-2 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-gray-600">Covered by Payment:</span>
-                            <a
-                              href={`#payments`}
-                              onClick={(e) => {
-                                e.preventDefault()
-                                // Navigate to payments page
-                                window.location.href = '/payments'
-                              }}
-                              className="text-indigo-600 hover:text-indigo-900 font-medium"
-                            >
-                              ${selectedLesson.payment.amount.toFixed(2)} on {new Date(selectedLesson.payment.date).toLocaleDateString()}
-                            </a>
-                          </div>
-                          {selectedLesson.payment.method && (
-                            <div className="text-xs text-gray-500 ml-6">
-                              Method: {selectedLesson.payment.method.charAt(0).toUpperCase() + selectedLesson.payment.method.slice(1)}
+                      ) : selectedLesson.payments && selectedLesson.payments.length > 0 ? (
+                        <div className="mt-2 space-y-2">
+                          <span className="text-gray-600">Covered by Payment{selectedLesson.payments.length > 1 ? 's' : ''}:</span>
+                          {selectedLesson.payments.map((lp, idx) => (
+                            <div key={lp.payment.id || idx} className="ml-4 space-y-1 border-l-2 border-gray-200 pl-3">
+                              <div className="flex items-center gap-2">
+                                <a
+                                  href={`#payments`}
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    window.location.href = '/payments'
+                                  }}
+                                  className="text-indigo-600 hover:text-indigo-900 font-medium"
+                                >
+                                  ${lp.amount.toFixed(2)} on {new Date(lp.payment.date).toLocaleDateString()}
+                                </a>
+                              </div>
+                              {lp.payment.method && (
+                                <div className="text-xs text-gray-500">
+                                  Method: {lp.payment.method.charAt(0).toUpperCase() + lp.payment.method.slice(1)}
+                                </div>
+                              )}
                             </div>
-                          )}
+                          ))}
                         </div>
                       ) : (
                         <div className="text-sm text-gray-500">

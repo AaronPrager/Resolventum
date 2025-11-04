@@ -1138,11 +1138,20 @@ export function Reports() {
                                                   </span>
                                                 </td>
                                                 <td className="px-4 py-2 text-sm text-gray-900">
-                                                  {lesson.isPaid ? (
-                                                    <span className="text-green-600 font-medium">${lesson.paidAmount.toFixed(2)} Paid</span>
-                                                  ) : (
-                                                    <span className="text-gray-500">Unpaid</span>
-                                                  )}
+                                                  {(() => {
+                                                    const isFullyPaid = lesson.isPaid;
+                                                    const paidAmount = lesson.paidAmount || 0;
+                                                    const price = lesson.price || 0;
+                                                    const isPartiallyPaid = !isFullyPaid && paidAmount > 0 && paidAmount < price;
+                                                    
+                                                    if (isFullyPaid) {
+                                                      return <span className="text-green-600 font-medium">${paidAmount.toFixed(2)} Paid</span>;
+                                                    } else if (isPartiallyPaid) {
+                                                      return <span className="text-yellow-600 font-medium">${paidAmount.toFixed(2)} Partially Paid</span>;
+                                                    } else {
+                                                      return <span className="text-gray-500">Unpaid</span>;
+                                                    }
+                                                  })()}
                                                 </td>
                                               </tr>
                                             ))}

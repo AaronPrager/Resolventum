@@ -782,6 +782,30 @@ router.get('/packages', async (req, res) => {
 
     // Enrich packages with calculated fields, recalculating hoursUsed from actual linked lessons
     const enrichedPackages = await Promise.all(packages.map(async (pkg) => {
+      // Sync purchasedAt with payment date if package has a linked payment
+      if (pkg.paymentId) {
+        const payment = await prisma.payment.findUnique({
+          where: { id: pkg.paymentId },
+          select: { date: true }
+        });
+        if (payment) {
+          const paymentDate = new Date(payment.date);
+          const packageDate = new Date(pkg.purchasedAt);
+          // Compare dates (ignoring time)
+          const paymentDateStr = paymentDate.toISOString().split('T')[0];
+          const packageDateStr = packageDate.toISOString().split('T')[0];
+          if (paymentDateStr !== packageDateStr) {
+            console.log(`[Package Report] Syncing purchasedAt for package ${pkg.id}: ${packageDateStr} -> ${paymentDateStr}`);
+            await prisma.package.update({
+              where: { id: pkg.id },
+              data: { purchasedAt: payment.date }
+            });
+            // Update the local object so the report shows the correct date
+            pkg.purchasedAt = payment.date;
+          }
+        }
+      }
+      
       // Recalculate hoursUsed from actual linked lessons
       const linkedLessons = await prisma.lesson.findMany({
         where: {

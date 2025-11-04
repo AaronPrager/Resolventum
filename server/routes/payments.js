@@ -56,29 +56,84 @@ async function applyPaymentToLessons(userId, studentId, paymentAmount, paymentId
     }
     
     if (availableAmount >= remainingNeeded) {
-      // Full payment for this lesson - mark as paid and link to payment
+      // Full payment for this lesson - mark as paid and link to payment via junction table
+      const amountToApply = remainingNeeded;
+      
+      // Create or update LessonPayment record
+      if (paymentId) {
+        await prisma.lessonPayment.upsert({
+          where: {
+            lessonId_paymentId: {
+              lessonId: lesson.id,
+              paymentId: paymentId
+            }
+          },
+          update: {
+            amount: amountToApply
+          },
+          create: {
+            lessonId: lesson.id,
+            paymentId: paymentId,
+            amount: amountToApply
+          }
+        });
+      }
+      
+      // Recalculate total paidAmount from all LessonPayment records for this lesson
+      const allLessonPayments = await prisma.lessonPayment.findMany({
+        where: { lessonId: lesson.id },
+        select: { amount: true }
+      });
+      const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+      
       await prisma.lesson.update({
         where: { id: lesson.id },
         data: { 
-          isPaid: true,
-          paidAmount: lessonPrice,
-          paymentId: paymentId // Link lesson to payment
+          isPaid: totalPaidAmount >= lessonPrice,
+          paidAmount: totalPaidAmount
         }
       });
       lessonsMarkedPaid.push({ lessonId: lesson.id, amount: remainingNeeded, totalAmount: lessonPrice });
       availableAmount -= remainingNeeded;
     } else {
-      // Partial payment - mark as partially paid and link to payment
-      const newPaidAmount = currentPaidAmount + availableAmount;
+      // Partial payment - mark as partially paid and link to payment via junction table
+      const amountToApply = availableAmount;
+      
+      // Create or update LessonPayment record
+      if (paymentId) {
+        await prisma.lessonPayment.upsert({
+          where: {
+            lessonId_paymentId: {
+              lessonId: lesson.id,
+              paymentId: paymentId
+            }
+          },
+          update: {
+            amount: amountToApply
+          },
+          create: {
+            lessonId: lesson.id,
+            paymentId: paymentId,
+            amount: amountToApply
+          }
+        });
+      }
+      
+      // Recalculate total paidAmount from all LessonPayment records for this lesson
+      const allLessonPayments = await prisma.lessonPayment.findMany({
+        where: { lessonId: lesson.id },
+        select: { amount: true }
+      });
+      const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+      
       await prisma.lesson.update({
         where: { id: lesson.id },
         data: { 
-          isPaid: false,
-          paidAmount: newPaidAmount,
-          paymentId: paymentId // Link lesson to payment (even if partially paid)
+          isPaid: totalPaidAmount >= lessonPrice,
+          paidAmount: totalPaidAmount
         }
       });
-      lessonsPartiallyPaid.push({ lessonId: lesson.id, amount: availableAmount, paidAmount: newPaidAmount, remaining: lessonPrice - newPaidAmount });
+      lessonsPartiallyPaid.push({ lessonId: lesson.id, amount: availableAmount, paidAmount: totalPaidAmount, remaining: lessonPrice - totalPaidAmount });
       availableAmount = 0;
       break;
     }
@@ -216,15 +271,23 @@ router.get('/', async (req, res) => {
       include: {
         student: true,
         lessons: {
-          select: {
-            id: true,
-            dateTime: true,
-            subject: true,
-            price: true,
-            paidAmount: true,
-            isPaid: true
+          include: {
+            lesson: {
+              select: {
+                id: true,
+                dateTime: true,
+                subject: true,
+                price: true,
+                paidAmount: true,
+                isPaid: true
+              }
+            }
           },
-          orderBy: { dateTime: 'asc' }
+          orderBy: {
+            lesson: {
+              dateTime: 'asc'
+            }
+          }
         }
       },
       orderBy: { date: 'desc' }
@@ -248,15 +311,23 @@ router.get('/:id', async (req, res) => {
       include: {
         student: true,
         lessons: {
-          select: {
-            id: true,
-            dateTime: true,
-            subject: true,
-            price: true,
-            paidAmount: true,
-            isPaid: true
+          include: {
+            lesson: {
+              select: {
+                id: true,
+                dateTime: true,
+                subject: true,
+                price: true,
+                paidAmount: true,
+                isPaid: true
+              }
+            }
           },
-          orderBy: { dateTime: 'asc' }
+          orderBy: {
+            lesson: {
+              dateTime: 'asc'
+            }
+          }
         },
         package: {
           select: {
@@ -303,8 +374,30 @@ router.post(
         return res.status(404).json({ message: 'Student not found' });
       }
 
-      // Check if this is a package payment
+      // Check if payment should be applied to family
+      const applyToFamily = req.body.applyToFamily === true || req.body.applyToFamily === 'true';
+      
+      // Get family members if applying to family
+      let familyStudents = [student];
+      if (applyToFamily && student.familyId) {
+        const familyMembers = await prisma.student.findMany({
+          where: { 
+            familyId: student.familyId,
+            userId: req.user.id,
+            archived: false
+          }
+        });
+        familyStudents = familyMembers;
+      }
+
+      // Check if this is a package payment (only valid for single student, not family)
       const isPackagePayment = req.body.notes && req.body.notes.startsWith('Package: ');
+      
+      if (isPackagePayment && applyToFamily) {
+        return res.status(400).json({ 
+          message: 'Package payments cannot be applied to families. Please select a single student.' 
+        });
+      }
       
       // Validate package payment
       if (isPackagePayment) {
@@ -331,27 +424,79 @@ router.post(
         }
       }
 
-      // Create the payment first
-      const payment = await prisma.payment.create({
-        data: {
-          ...req.body,
+      // Create payments for all family members if applyToFamily is true
+      const createdPayments = [];
+      
+      for (const familyStudent of familyStudents) {
+        // Create payment data for this student
+        const paymentData = {
+          studentId: familyStudent.id,
+          amount: req.body.amount,
+          method: req.body.method,
+          date: req.body.date,
+          notes: req.body.notes || null,
           userId: req.user.id
-        },
-        include: {
-          student: true
+        };
+
+        // Create the payment
+        const payment = await prisma.payment.create({
+          data: paymentData,
+          include: {
+            student: true
+          }
+        });
+
+        createdPayments.push(payment);
+
+        // Apply payment to lessons (unless it's a package payment)
+        if (!isPackagePayment) {
+          try {
+            await applyPaymentToLessons(
+              req.user.id,
+              familyStudent.id,
+              req.body.amount,
+              payment.id // Pass payment ID to link lessons
+            );
+          } catch (applicationError) {
+            console.error(`Payment application error for student ${familyStudent.id}:`, applicationError);
+            // Continue with other students even if one fails
+          }
         }
-      });
+      }
 
-      // Apply payment to lessons (unless it's a package payment)
-      if (!isPackagePayment) {
-        try {
-          const applicationResult = await applyPaymentToLessons(
-            req.user.id,
-            req.body.studentId,
-            req.body.amount,
-            payment.id // Pass payment ID to link lessons
-          );
+      // If applying to family, return the first payment with a summary
+      if (applyToFamily && familyStudents.length > 1) {
+        // Fetch updated credits for all family members
+        const familyCredits = await Promise.all(
+          familyStudents.map(async (s) => {
+            const student = await prisma.student.findUnique({
+              where: { id: s.id },
+              select: { credit: true, firstName: true, lastName: true }
+            });
+            return {
+              studentId: s.id,
+              studentName: `${student.firstName} ${student.lastName}`,
+              credit: student?.credit || 0
+            };
+          })
+        );
 
+        res.status(201).json({
+          ...createdPayments[0],
+          isFamilyPayment: true,
+          familyPayments: createdPayments.map(p => ({
+            id: p.id,
+            studentId: p.studentId,
+            studentName: `${p.student.firstName} ${p.student.lastName}`
+          })),
+          familyCredits,
+          message: `Payment recorded for ${familyStudents.length} family member${familyStudents.length > 1 ? 's' : ''}`
+        });
+      } else {
+        // Single student payment
+        const payment = createdPayments[0];
+        
+        if (!isPackagePayment) {
           // Fetch updated student to get current credit
           const updatedStudent = await prisma.student.findUnique({
             where: { id: req.body.studentId },
@@ -360,25 +505,15 @@ router.post(
 
           res.status(201).json({
             ...payment,
-            applicationResult: {
-              ...applicationResult,
-              currentCredit: updatedStudent?.credit || 0
-            }
+            currentCredit: updatedStudent?.credit || 0
           });
-        } catch (applicationError) {
-          console.error('Payment application error:', applicationError);
-          // Still return the payment even if application failed
+        } else {
+          // Package payment - don't apply to lessons (package creation handles payment application)
           res.status(201).json({
             ...payment,
-            applicationError: applicationError.message
+            message: 'Package payment created. The package payment amount will be applied when the package is created.'
           });
         }
-      } else {
-        // Package payment - don't apply to lessons (package creation handles payment application)
-        res.status(201).json({
-          ...payment,
-          message: 'Package payment created. The package payment amount will be applied when the package is created.'
-        });
       }
     } catch (error) {
       console.error('Create payment error:', error);
@@ -546,29 +681,59 @@ router.patch('/:id/link-lesson', async (req, res) => {
       return res.status(404).json({ message: 'Lesson not found or does not belong to this student' });
     }
 
-    // Calculate paid amount - use payment amount or lesson price, whichever is smaller
+    // Calculate paid amount - use payment amount or remaining lesson price, whichever is smaller
     const lessonPrice = lesson.price || 0;
+    const currentPaidAmount = lesson.paidAmount || 0;
+    const remainingNeeded = lessonPrice - currentPaidAmount;
     const paymentAmount = payment.amount || 0;
-    const paidAmount = Math.min(paymentAmount, lessonPrice);
+    const amountToApply = Math.min(paymentAmount, remainingNeeded);
 
-    // Update lesson to link to payment
+    // Create or update LessonPayment record
+    await prisma.lessonPayment.upsert({
+      where: {
+        lessonId_paymentId: {
+          lessonId: lessonId,
+          paymentId: payment.id
+        }
+      },
+      update: {
+        amount: amountToApply
+      },
+      create: {
+        lessonId: lessonId,
+        paymentId: payment.id,
+        amount: amountToApply
+      }
+    });
+
+    // Recalculate total paidAmount from all LessonPayment records for this lesson
+    const allLessonPayments = await prisma.lessonPayment.findMany({
+      where: { lessonId: lessonId },
+      select: { amount: true }
+    });
+    const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+
+    // Update lesson payment status
     const updatedLesson = await prisma.lesson.update({
       where: { id: lessonId },
       data: {
-        paymentId: payment.id,
-        isPaid: paidAmount >= lessonPrice,
-        paidAmount: paidAmount,
+        isPaid: totalPaidAmount >= lessonPrice,
+        paidAmount: totalPaidAmount,
         packageId: null // Clear package link if linking to a regular payment
       },
       include: {
         student: true,
-        payment: {
-          select: {
-            id: true,
-            date: true,
-            amount: true,
-            method: true,
-            notes: true
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true,
+                notes: true
+              }
+            }
           }
         },
         package: {
@@ -592,14 +757,22 @@ router.patch('/:id/link-lesson', async (req, res) => {
         student: true,
         lessons: {
           include: {
-            student: {
-              select: {
-                firstName: true,
-                lastName: true
+            lesson: {
+              include: {
+                student: {
+                  select: {
+                    firstName: true,
+                    lastName: true
+                  }
+                }
               }
             }
           },
-          orderBy: { dateTime: 'asc' }
+          orderBy: {
+            lesson: {
+              dateTime: 'asc'
+            }
+          }
         }
       }
     });

@@ -79,8 +79,6 @@ model Lesson {
   student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   packageId String?  // Link to package if this lesson was paid with a package
   package   Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  paymentId String?  // Link to payment if this lesson was paid with a specific payment
-  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
   dateTime  DateTime
   duration  Int      // in minutes
   subject   String
@@ -99,13 +97,15 @@ model Lesson {
   allDay    Boolean @default(false) // All-day event
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  
+  // Many-to-many relationship with payments
+  payments  LessonPayment[]
 
   @@index([userId])
   @@index([studentId])
   @@index([dateTime])
   @@index([recurringGroupId])
   @@index([packageId])
-  @@index([paymentId])
 }
 
 model Package {
@@ -140,17 +140,34 @@ model Payment {
   student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
   packageId   String?  @unique // Link to package if this payment is for a package
   package     Package? @relation
-  lessons     Lesson[] // Lessons paid with this payment
   amount      Float
   date        DateTime @default(now())
   method      String   // cash, card, bank_transfer
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  
+  // Many-to-many relationship with lessons
+  lessons     LessonPayment[]
 
   @@index([userId])
   @@index([studentId])
   @@index([date])
+}
+
+// Junction table for many-to-many relationship between Lesson and Payment
+model LessonPayment {
+  id        String   @id @default(uuid())
+  lessonId  String
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  paymentId String
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amount    Float    // Amount from this payment that goes to this lesson
+  createdAt DateTime @default(now())
+
+  @@unique([lessonId, paymentId])
+  @@index([lessonId])
+  @@index([paymentId])
 }
 
 model Settings {

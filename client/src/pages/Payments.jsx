@@ -15,7 +15,10 @@ export function Payments() {
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
   const [filterStudentId, setFilterStudentId] = useState('')
+  const [filterMonth, setFilterMonth] = useState('')
+  const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()))
   const [isSubmittingPackage, setIsSubmittingPackage] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [showLinkLessonModal, setShowLinkLessonModal] = useState(false)
   const [availableLessons, setAvailableLessons] = useState([])
   const [selectedLessonId, setSelectedLessonId] = useState('')
@@ -24,8 +27,10 @@ export function Payments() {
     amount: '',
     method: 'venmo',
     date: new Date().toISOString().split('T')[0],
-    notes: ''
+    notes: '',
+    applyToFamily: false
   })
+  const [selectedStudentFamily, setSelectedStudentFamily] = useState([])
 
   const [packageForm, setPackageForm] = useState({
     studentId: '',
@@ -43,9 +48,30 @@ export function Payments() {
     fetchPackages()
   }, [])
 
+  useEffect(() => {
+    fetchPayments()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterStudentId, filterMonth, filterYear])
+
   const fetchPayments = async () => {
     try {
-      const { data } = await api.get('/payments')
+      const params = {}
+      if (filterStudentId) {
+        params.studentId = filterStudentId
+      }
+      // Filter by month if both month and year are provided
+      if (filterMonth && filterYear) {
+        const m = parseInt(filterMonth)
+        const y = parseInt(filterYear)
+        if (!isNaN(m) && m >= 1 && m <= 12 && !isNaN(y) && y >= 2000 && y <= 2100) {
+          const start = new Date(y, m - 1, 1, 0, 0, 0, 0)
+          const end = new Date(y, m, 0, 23, 59, 59, 999)
+          params.startDate = start.toISOString()
+          params.endDate = end.toISOString()
+        }
+      }
+      
+      const { data } = await api.get('/payments', { params })
       setPayments(data)
       // Update selected payment if it exists
       if (selectedPayment && data.length > 0) {
@@ -127,9 +153,19 @@ export function Payments() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (isSubmitting) return // Prevent double submission
+    
+    setIsSubmitting(true)
     try {
       // Check if this is a package payment
       const isPackagePayment = formData.notes && formData.notes.trim().startsWith('Package: ')
+      
+      // Validate: Package payments cannot be applied to families
+      if (isPackagePayment && formData.applyToFamily) {
+        toast.error('Package payments cannot be applied to families. Please select a single student.')
+        setIsSubmitting(false)
+        return
+      }
       
       // Validate package payment if applicable
       if (isPackagePayment) {
@@ -137,16 +173,19 @@ export function Payments() {
         
         if (!selectedStudent) {
           toast.error('Please select a student')
+          setIsSubmitting(false)
           return
         }
         
         if (!selectedStudent.usePackages) {
           toast.error('This student does not use packages. Please enable packages for this student first.')
+          setIsSubmitting(false)
           return
         }
         
         if (!selectedStudent.pricePerPackage) {
           toast.error('This student does not have a package price set.')
+          setIsSubmitting(false)
           return
         }
         
@@ -156,6 +195,7 @@ export function Payments() {
         
         if (amountDiff > 0.01) {
           toast.error(`Package payment amount ($${amount.toFixed(2)}) must match student's package price ($${expectedAmount.toFixed(2)})`)
+          setIsSubmitting(false)
           return
         }
       }
@@ -178,7 +218,14 @@ export function Payments() {
       } else {
         const { data } = await api.post('/payments', submitData)
         updatedPayment = data
-        toast.success('Payment recorded successfully')
+        
+        // Check if this was a family payment
+        if (formData.applyToFamily && selectedStudentFamily.length > 0) {
+          const totalFamilyMembers = selectedStudentFamily.length + 1 // +1 for the selected student
+          toast.success(`Payment recorded for ${totalFamilyMembers} family member${totalFamilyMembers > 1 ? 's' : ''}`)
+        } else {
+          toast.success('Payment recorded successfully')
+        }
       }
       
       await fetchPayments()
@@ -196,6 +243,8 @@ export function Payments() {
       resetForm()
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to save payment')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -246,10 +295,37 @@ export function Payments() {
       amount: '',
       method: 'venmo',
       date: new Date().toISOString().split('T')[0],
-      notes: ''
+      notes: '',
+      applyToFamily: false
     })
     setEditingPayment(null)
+    setIsSubmitting(false)
+    setSelectedStudentFamily([])
   }
+
+  // Update family members when student is selected
+  useEffect(() => {
+    if (formData.studentId && !editingPayment) {
+      const selectedStudent = students.find(s => s.id === formData.studentId)
+      if (selectedStudent && selectedStudent.familyId) {
+        // Find all students in the same family
+        const familyMembers = students.filter(s => 
+          s.familyId === selectedStudent.familyId && 
+          s.id !== selectedStudent.id && 
+          !s.archived
+        )
+        setSelectedStudentFamily(familyMembers)
+      } else {
+        setSelectedStudentFamily([])
+        // Reset applyToFamily if student has no family
+        if (formData.applyToFamily) {
+          setFormData(prev => ({ ...prev, applyToFamily: false }))
+        }
+      }
+    } else {
+      setSelectedStudentFamily([])
+    }
+  }, [formData.studentId, students, editingPayment])
 
   // Update selectedPayment when payments array changes (if it matches)
   useEffect(() => {
@@ -463,6 +539,47 @@ export function Payments() {
                 <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>
               ))}
             </select>
+            
+            <label className="text-gray-700">Month:</label>
+            <select
+              value={filterMonth}
+              onChange={(e) => {
+                const val = e.target.value
+                setFilterMonth(val)
+              }}
+              className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-0"
+            >
+              <option value="">All months</option>
+              <option value="01">January</option>
+              <option value="02">February</option>
+              <option value="03">March</option>
+              <option value="04">April</option>
+              <option value="05">May</option>
+              <option value="06">June</option>
+              <option value="07">July</option>
+              <option value="08">August</option>
+              <option value="09">September</option>
+              <option value="10">October</option>
+              <option value="11">November</option>
+              <option value="12">December</option>
+            </select>
+            
+            <label className="text-gray-700">Year:</label>
+            <input
+              type="number"
+              min="2000"
+              max="2100"
+              value={filterYear}
+              onChange={(e) => setFilterYear(e.target.value)}
+              className="border border-gray-300 rounded-md px-2 py-1 w-20 focus:outline-none focus:ring-0"
+              placeholder="All years"
+            />
+            
+            {(filterStudentId || (filterMonth && filterYear)) && (
+              <span className="text-xs text-gray-500 ml-auto">
+                Showing {sortedPayments.length} payment{sortedPayments.length !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
 
           {/* Headers */}
@@ -700,32 +817,35 @@ export function Payments() {
                   </div>
                   {selectedPayment.lessons && selectedPayment.lessons.length > 0 ? (
                     <div className="space-y-2">
-                      {selectedPayment.lessons.map((lesson) => (
-                        <div key={lesson.id} className="text-sm border border-gray-200 rounded p-2 bg-gray-50">
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1">
-                              <div className="font-medium text-gray-900">
-                                {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                                {lesson.subject && ` - ${lesson.subject}`}
+                      {selectedPayment.lessons.map((lp) => {
+                        const lesson = lp.lesson || lp; // Handle both new structure (lp.lesson) and old (direct lesson)
+                        return (
+                          <div key={lesson.id || lp.id} className="text-sm border border-gray-200 rounded p-2 bg-gray-50">
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1">
+                                <div className="font-medium text-gray-900">
+                                  {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                  {lesson.subject && ` - ${lesson.subject}`}
+                                </div>
+                                <div className="text-xs text-gray-600 mt-0.5">
+                                  ${lesson.price.toFixed(2)} • Paid from this payment: ${(lp.amount || lesson.paidAmount).toFixed(2)}
+                                  {lesson.isPaid && <span className="ml-1 text-green-600">(Fully Paid)</span>}
+                                </div>
                               </div>
-                              <div className="text-xs text-gray-600 mt-0.5">
-                                ${lesson.price.toFixed(2)} • Paid: ${lesson.paidAmount.toFixed(2)}
-                                {lesson.isPaid && <span className="ml-1 text-green-600">(Fully Paid)</span>}
-                              </div>
+                              <a
+                                href="#lessons"
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  window.location.href = '/lessons'
+                                }}
+                                className="text-indigo-600 hover:text-indigo-900 text-xs font-medium"
+                              >
+                                View
+                              </a>
                             </div>
-                            <a
-                              href="#lessons"
-                              onClick={(e) => {
-                                e.preventDefault()
-                                window.location.href = '/lessons'
-                              }}
-                              className="text-indigo-600 hover:text-indigo-900 text-xs font-medium"
-                            >
-                              View
-                            </a>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   ) : (
                     <div className="text-sm text-gray-500">
@@ -772,8 +892,9 @@ export function Payments() {
                         <select
                           required
                           value={formData.studentId}
-                          onChange={(e) => setFormData({ ...formData, studentId: e.target.value })}
-                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm"
+                          onChange={(e) => setFormData({ ...formData, studentId: e.target.value, applyToFamily: false })}
+                          disabled={editingPayment}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:bg-gray-50 disabled:cursor-not-allowed"
                         >
                           <option value="">Select student</option>
                           {students.map(s => (
@@ -784,6 +905,38 @@ export function Payments() {
                         </select>
                       </div>
                     </div>
+
+                    {/* Apply to Family - Only show if student has family members */}
+                    {selectedStudentFamily.length > 0 && !editingPayment && (
+                      <div className="flex items-start py-2">
+                        <label className="w-32 text-sm text-gray-600 pt-2"></label>
+                        <div className="flex-1">
+                          <label className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={formData.applyToFamily}
+                              onChange={(e) => setFormData({ ...formData, applyToFamily: e.target.checked })}
+                              className="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                            />
+                            <div className="flex-1">
+                              <span className="text-sm text-gray-700 font-medium">Apply payment to entire family</span>
+                              <div className="text-xs text-gray-500 mt-1">
+                                This payment will be applied to all family members:
+                                <ul className="list-disc list-inside mt-1 ml-2">
+                                  <li>Selected student: {students.find(s => s.id === formData.studentId)?.firstName} {students.find(s => s.id === formData.studentId)?.lastName}</li>
+                                  {selectedStudentFamily.map(member => (
+                                    <li key={member.id}>{member.firstName} {member.lastName}</li>
+                                  ))}
+                                </ul>
+                                <span className="block mt-1 text-gray-600">
+                                  Each family member will receive a payment of ${formData.amount || '0.00'} applied to their lessons.
+                                </span>
+                              </div>
+                            </div>
+                          </label>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Amount */}
                     <div className="flex items-start py-2">
@@ -901,16 +1054,23 @@ export function Payments() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => { setShowModal(false); resetForm(); }}
-                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      onClick={() => { 
+                        if (!isSubmitting) {
+                          setShowModal(false)
+                          resetForm()
+                        }
+                      }}
+                      disabled={isSubmitting}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700"
+                      disabled={isSubmitting}
+                      className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Save
+                      {isSubmitting ? 'Saving...' : 'Save'}
                     </button>
                   </div>
                 </div>
