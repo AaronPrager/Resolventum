@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import prisma from '../prisma/client.js';
+import { generateBalanceStatementPDF } from '../utils/balanceStatementGenerator.js';
 
 const router = express.Router();
 

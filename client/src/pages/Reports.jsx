@@ -2368,15 +2368,55 @@ export function Reports() {
                 )}
                 <p className="text-sm text-gray-500 mt-1">Click outside to close</p>
               </div>
-              <button
-                onClick={() => {
-                  setSelectedOutstandingStudent(null)
-                  setOutstandingStudentDetails(null)
-                }}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <X className="h-6 w-6" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={async () => {
+                    try {
+                      const studentId = selectedOutstandingStudent?.studentId
+                      if (!studentId) {
+                        toast.error('Cannot generate PDF')
+                        return
+                      }
+                      
+                      toast.loading('Generating PDF...', { id: 'pdf-generation' })
+                      const response = await api.post(
+                        `/reports/balance-statement/${studentId}`,
+                        {},
+                        { responseType: 'blob' }
+                      )
+                      
+                      // Create a blob URL and trigger download
+                      const blob = new Blob([response.data], { type: 'application/pdf' })
+                      const url = window.URL.createObjectURL(blob)
+                      const link = document.createElement('a')
+                      link.href = url
+                      link.download = `balance-statement-${selectedOutstandingStudent.studentName.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`
+                      document.body.appendChild(link)
+                      link.click()
+                      document.body.removeChild(link)
+                      window.URL.revokeObjectURL(url)
+                      
+                      toast.success('PDF downloaded successfully', { id: 'pdf-generation' })
+                    } catch (error) {
+                      console.error('Failed to generate PDF:', error)
+                      toast.error('Failed to generate PDF', { id: 'pdf-generation' })
+                    }
+                  }}
+                  className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Download PDF
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedOutstandingStudent(null)
+                    setOutstandingStudentDetails(null)
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
             </div>
             
             <div className="overflow-y-auto flex-1 p-6">
