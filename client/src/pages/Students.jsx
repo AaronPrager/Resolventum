@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Download, Archive, ArchiveRestore } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Archive, ArchiveRestore } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Students() {
@@ -69,7 +69,44 @@ export function Students() {
 
   const handleArchive = async (studentId, archived) => {
     try {
-      await api.patch(`/students/${studentId}/archive`, { archived })
+      let forceArchive = false
+      
+      // If archiving, check balance first
+      if (archived) {
+        try {
+          const { data: balanceData } = await api.get(`/students/${studentId}/balance`)
+          
+          // Check if there's a balance (outstanding balance or credit)
+          if (balanceData.hasBalance) {
+            const outstandingBalance = balanceData.outstandingBalance || 0
+            const credit = balanceData.credit || 0
+            
+            let message = `This student has a balance:\n\n`
+            if (outstandingBalance > 0) {
+              message += `Outstanding Balance: $${outstandingBalance.toFixed(2)}\n`
+            } else if (outstandingBalance < 0) {
+              message += `Overpaid: $${Math.abs(outstandingBalance).toFixed(2)}\n`
+            }
+            if (credit > 0) {
+              message += `Credit: $${credit.toFixed(2)}\n`
+            }
+            message += `\nAre you sure you want to archive this student?`
+            
+            if (!window.confirm(message)) {
+              return // User cancelled
+            }
+            
+            // User confirmed, so we'll force the archive
+            forceArchive = true
+          }
+        } catch (error) {
+          // If balance check fails, still allow archiving but log the error
+          console.error('Failed to check balance:', error)
+        }
+      }
+      
+      // Proceed with archive/unarchive (with force=true only if user confirmed after balance warning)
+      await api.patch(`/students/${studentId}/archive`, { archived, force: forceArchive })
       toast.success(archived ? 'Student archived' : 'Student unarchived')
       fetchStudents()
       // If we archived the selected student, clear selection
@@ -77,7 +114,22 @@ export function Students() {
         setSelectedStudent(null)
       }
     } catch (error) {
-      toast.error('Failed to update student')
+      if (error.response?.status === 400 && error.response?.data?.outstandingBalance !== undefined) {
+        // Balance check error from backend - show detailed message
+        const { outstandingBalance, credit } = error.response.data
+        let message = 'Cannot archive student with balance:\n\n'
+        if (outstandingBalance > 0) {
+          message += `Outstanding Balance: $${outstandingBalance.toFixed(2)}\n`
+        } else if (outstandingBalance < 0) {
+          message += `Overpaid: $${Math.abs(outstandingBalance).toFixed(2)}\n`
+        }
+        if (credit > 0) {
+          message += `Credit: $${credit.toFixed(2)}\n`
+        }
+        toast.error(message)
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to update student')
+      }
     }
   }
 
@@ -157,8 +209,10 @@ export function Students() {
       }
 
       if (isEditing && selectedStudent) {
-        await api.put(`/students/${selectedStudent.id}`, submitData)
+        const { data: updatedStudent } = await api.put(`/students/${selectedStudent.id}`, submitData)
         toast.success('Student updated successfully')
+        // Update the selected student data to show updated information
+        setSelectedStudent(updatedStudent)
       } else {
         await api.post('/students', submitData)
         toast.success('Student created successfully')
@@ -260,39 +314,6 @@ export function Students() {
     setShowCreditModal(true)
   }
 
-  const handleDeleteAllLessons = async () => {
-    if (!selectedStudent) return
-    
-    const confirmMessage = `Are you sure you want to delete ALL lessons for ${selectedStudent.firstName} ${selectedStudent.lastName}? This action cannot be undone.`
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    try {
-      const { data } = await api.delete(`/students/${selectedStudent.id}/lessons`)
-      toast.success(data.message || `Deleted ${data.deletedCount} lessons`)
-      fetchStudents() // Refresh to update any lesson counts
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to delete lessons')
-    }
-  }
-
-  const handleRecalculatePrices = async () => {
-    if (!selectedStudent) return
-    
-    const confirmMessage = `Recalculate all lesson prices for ${selectedStudent.firstName} ${selectedStudent.lastName} based on current packages? This will update lesson prices to reflect package rates.`
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    try {
-      const { data } = await api.post(`/students/${selectedStudent.id}/recalculate-prices`)
-      toast.success(data.message || `Recalculated prices for ${data.updatedCount} lessons`)
-      fetchStudents() // Refresh to update any lesson counts
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to recalculate prices')
-    }
-  }
 
   const handleImportFromJson = async () => {
     try {
@@ -354,54 +375,6 @@ export function Students() {
     }
   }
 
-  const handleExportToJson = () => {
-    if (!selectedStudent) {
-      toast.error('Please select a student to export')
-      return
-    }
-
-    try {
-      // Create a clean JSON object with only the relevant student fields (exclude internal fields)
-      const exportData = {
-        firstName: selectedStudent.firstName,
-        lastName: selectedStudent.lastName,
-        dateOfBirth: selectedStudent.dateOfBirth || null,
-        email: selectedStudent.email || null,
-        phone: selectedStudent.phone || null,
-        address: selectedStudent.address || null,
-        schoolName: selectedStudent.schoolName || null,
-        grade: selectedStudent.grade || null,
-        subject: selectedStudent.subject || null,
-        difficulties: selectedStudent.difficulties || null,
-        pricePerLesson: selectedStudent.pricePerLesson || null,
-        pricePerPackage: selectedStudent.pricePerPackage || null,
-        parentFullName: selectedStudent.parentFullName || null,
-        parentAddress: selectedStudent.parentAddress || null,
-        parentPhone: selectedStudent.parentPhone || null,
-        parentEmail: selectedStudent.parentEmail || null,
-        emergencyContactInfo: selectedStudent.emergencyContactInfo || null,
-        notes: selectedStudent.notes || null
-      }
-
-      // Convert to JSON string with proper formatting
-      const jsonString = JSON.stringify(exportData, null, 2)
-      
-      // Create a blob and download
-      const blob = new Blob([jsonString], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${selectedStudent.firstName}_${selectedStudent.lastName}_student_data.json`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      URL.revokeObjectURL(url)
-      
-      toast.success('Student data exported successfully')
-    } catch (error) {
-      toast.error('Failed to export student data')
-    }
-  }
 
   const resetForm = () => {
     setFormData({
@@ -642,13 +615,6 @@ export function Students() {
                     <p className="text-sm text-gray-500 mt-1">{selectedStudent.subject || '-'}</p>
                   </div>
                   <div className="flex gap-2">
-                    <button
-                      onClick={handleExportToJson}
-                      className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      title="Export to JSON"
-                    >
-                      <Download className="h-4 w-4" />
-                    </button>
                     {selectedStudent.archived ? (
                       <button
                         onClick={() => handleArchive(selectedStudent.id, false)}
@@ -672,20 +638,6 @@ export function Students() {
                       title="Edit student"
                     >
                       <Edit className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={handleRecalculatePrices}
-                      className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
-                      title="Recalculate all lesson prices based on packages"
-                    >
-                      <DollarSign className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={handleDeleteAllLessons}
-                      className="p-1.5 rounded-md text-orange-600 hover:bg-orange-50 transition-colors"
-                      title="Delete all lessons for this student"
-                    >
-                      <Calendar className="h-4 w-4" />
                     </button>
                     <button
                       onClick={handleDeleteStudent}

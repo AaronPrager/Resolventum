@@ -2,6 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Detect if running in Vercel/serverless (auto-detect if VERCEL env var not set)
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_URL || process.env.VERCEL_REGION;
@@ -37,12 +43,15 @@ import packagesRoutes from './routes/packages.js';
 import paymentsRoutes from './routes/payments.js';
 import invoicesRoutes from './routes/invoices.js';
 import reportsRoutes from './routes/reports.js';
+import profileRoutes from './routes/profile.js';
 
 const app = express();
 const PORT = process.env.PORT || 5002;
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
 app.use(cors());
 app.use(express.json());
 
@@ -71,6 +80,15 @@ app.use('/api/packages', packagesRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/invoices', invoicesRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/profile', profileRoutes);
+
+// Serve uploaded files
+// Serve uploaded files (before error handlers)
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  }
+}));
 
 // Error handling middleware
 app.use((err, req, res, next) => {

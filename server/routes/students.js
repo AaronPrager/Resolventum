@@ -412,10 +412,85 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Get student balance (for archive check)
+router.get('/:id/balance', async (req, res) => {
+  try {
+    const student = await prisma.student.findFirst({
+      where: {
+        id: req.params.id,
+        userId: req.user.id
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        credit: true,
+        pricePerLesson: true
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    const now = new Date();
+    
+    // Get all completed lessons for this student
+    const lessons = await prisma.lesson.findMany({
+      where: {
+        studentId: student.id,
+        dateTime: { lt: now }
+      },
+      select: {
+        id: true,
+        price: true
+      }
+    });
+
+    // Calculate total billed (use lesson price or fallback to student's pricePerLesson)
+    // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+    // Only fall back to student's price if lesson.price is null or undefined
+    const totalBilled = lessons.reduce((sum, l) => {
+      const lessonPrice = l.price != null ? l.price : (student.pricePerLesson || 0);
+      return sum + lessonPrice;
+    }, 0);
+
+    // Get all payments applied to this student's lessons via LessonPayment
+    const lessonPayments = await prisma.lessonPayment.findMany({
+      where: {
+        lesson: {
+          studentId: student.id
+        }
+      },
+      select: {
+        amount: true
+      }
+    });
+
+    // Calculate total paid
+    const totalPaid = lessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+
+    // Outstanding balance = billed - paid
+    const outstandingBalance = totalBilled - totalPaid;
+    const credit = student.credit || 0;
+
+    res.json({
+      outstandingBalance,
+      credit,
+      totalBilled,
+      totalPaid,
+      hasBalance: outstandingBalance !== 0 || credit !== 0
+    });
+  } catch (error) {
+    console.error('Get student balance error:', error);
+    res.status(500).json({ message: 'Error calculating student balance' });
+  }
+});
+
 // Archive/Unarchive student
 router.patch('/:id/archive', async (req, res) => {
   try {
-    const { archived } = req.body; // true to archive, false to unarchive
+    const { archived, force } = req.body; // true to archive, false to unarchive, force=true to skip balance check
     
     const student = await prisma.student.findFirst({
       where: {
@@ -426,6 +501,61 @@ router.patch('/:id/archive', async (req, res) => {
 
     if (!student) {
       return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // If archiving (not unarchiving) and not forcing, check balance
+    if (archived === true && !force) {
+      const now = new Date();
+      
+      // Get all completed lessons for this student
+      const lessons = await prisma.lesson.findMany({
+        where: {
+          studentId: student.id,
+          dateTime: { lt: now }
+        },
+        select: {
+          id: true,
+          price: true
+        }
+      });
+
+      // Calculate total billed
+      // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+      // Only fall back to student's price if lesson.price is null or undefined
+      const totalBilled = lessons.reduce((sum, l) => {
+        const lessonPrice = l.price != null ? l.price : (student.pricePerLesson || 0);
+        return sum + lessonPrice;
+      }, 0);
+
+      // Get all payments applied to this student's lessons
+      const lessonPayments = await prisma.lessonPayment.findMany({
+        where: {
+          lesson: {
+            studentId: student.id
+          }
+        },
+        select: {
+          amount: true
+        }
+      });
+
+      // Calculate total paid
+      const totalPaid = lessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+
+      // Outstanding balance = billed - paid
+      const outstandingBalance = totalBilled - totalPaid;
+      const credit = student.credit || 0;
+
+      // If there's a balance, return error with balance info
+      if (outstandingBalance !== 0 || credit !== 0) {
+        return res.status(400).json({
+          message: 'Student has outstanding balance or credit',
+          outstandingBalance,
+          credit,
+          totalBilled,
+          totalPaid
+        });
+      }
     }
 
     const updatedStudent = await prisma.student.update({
@@ -439,6 +569,9 @@ router.patch('/:id/archive', async (req, res) => {
     });
   } catch (error) {
     console.error('Archive student error:', error);
+    if (error.status === 400) {
+      throw error; // Re-throw balance check errors
+    }
     res.status(500).json({ message: 'Error archiving student' });
   }
 });

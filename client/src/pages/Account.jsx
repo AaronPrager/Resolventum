@@ -1,12 +1,137 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
+import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
+import { Upload, X, Building2, Phone, Mail, MapPin, User } from 'lucide-react'
 
 export function Account() {
+  const { user, updateUser } = useAuth()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  
+  // Profile state
+  const [profile, setProfile] = useState({
+    name: '',
+    companyName: '',
+    phone: '',
+    email: '',
+    address: '',
+    logoUrl: ''
+  })
+  const [profileLoading, setProfileLoading] = useState(false)
+  const [logoPreview, setLogoPreview] = useState(null)
+  const [logoFile, setLogoFile] = useState(null)
+
+  useEffect(() => {
+    loadProfile()
+  }, [])
+
+  const loadProfile = async () => {
+    try {
+      const { data } = await api.get('/profile')
+      setProfile(data)
+      if (data.logoUrl) {
+        // If logoUrl is already a full URL, use it as is
+        // If it starts with /uploads, use it directly (will be proxied by Vite)
+        // Otherwise, prepend the API base URL
+        if (data.logoUrl.startsWith('http')) {
+          setLogoPreview(data.logoUrl)
+        } else if (data.logoUrl.startsWith('/uploads')) {
+          setLogoPreview(data.logoUrl)
+        } else {
+          setLogoPreview(`${api.defaults.baseURL}${data.logoUrl}`)
+        }
+      } else {
+        setLogoPreview(null)
+      }
+    } catch (error) {
+      console.error('Failed to load profile:', error)
+    }
+  }
+
+  const handleProfileSubmit = async (e) => {
+    e.preventDefault()
+    setProfileLoading(true)
+    try {
+      const formData = new FormData()
+      formData.append('name', profile.name)
+      formData.append('email', profile.email)
+      formData.append('companyName', profile.companyName || '')
+      formData.append('phone', profile.phone || '')
+      formData.append('address', profile.address || '')
+      
+      if (logoFile) {
+        formData.append('logo', logoFile)
+      }
+      
+      // If logo was removed
+      if (!logoPreview && profile.logoUrl) {
+        formData.append('logoUrl', '')
+      }
+
+      // Don't set Content-Type header - axios will set it automatically with boundary for FormData
+      const { data } = await api.put('/profile', formData)
+      
+      setProfile(data)
+      setLogoFile(null)
+      if (data.logoUrl) {
+        // If logoUrl is already a full URL, use it as is
+        // If it starts with /uploads, use it directly (will be proxied by Vite)
+        // Otherwise, prepend the API base URL
+        if (data.logoUrl.startsWith('http')) {
+          setLogoPreview(data.logoUrl)
+        } else if (data.logoUrl.startsWith('/uploads')) {
+          setLogoPreview(data.logoUrl)
+        } else {
+          setLogoPreview(`${api.defaults.baseURL}${data.logoUrl}`)
+        }
+      } else {
+        setLogoPreview(null)
+      }
+      // Update user context with new name and email
+      if (updateUser && user) {
+        const updatedUser = { ...user, name: data.name, email: data.email }
+        updateUser(updatedUser)
+      }
+      toast.success('Profile updated successfully')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update profile')
+    } finally {
+      setProfileLoading(false)
+    }
+  }
+
+  const handleLogoChange = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      // Validate file type
+      const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+      if (!validTypes.includes(file.type)) {
+        toast.error('Please select a valid image file (JPEG, PNG, GIF, or WebP)')
+        return
+      }
+      
+      // Validate file size (5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error('Image size must be less than 5MB')
+        return
+      }
+
+      setLogoFile(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setLogoPreview(reader.result)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleRemoveLogo = () => {
+    setLogoFile(null)
+    setLogoPreview(null)
+  }
 
   const handleChangePassword = async (e) => {
     e.preventDefault()
@@ -16,7 +141,9 @@ export function Account() {
       setLoading(true)
       await api.post('/auth/change-password', { currentPassword, newPassword })
       toast.success('Password changed successfully')
-      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('')
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to change password')
     } finally {
@@ -25,28 +152,181 @@ export function Account() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-4xl mx-auto space-y-6">
+      {/* Profile Section */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Company Profile</h2>
+        <p className="text-sm text-gray-500 mb-6">Update your company information. This will be used on invoices and other documents.</p>
+        
+        <form onSubmit={handleProfileSubmit} className="space-y-6">
+          {/* Logo Upload */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Company Logo</label>
+            <div className="flex items-start gap-4">
+              {logoPreview ? (
+                <div className="relative">
+                  <img 
+                    src={logoPreview.startsWith('data:') || logoPreview.startsWith('http') || logoPreview.startsWith('/uploads')
+                      ? logoPreview 
+                      : `${api.defaults.baseURL}${logoPreview}`}
+                    alt="Company logo" 
+                    className="w-32 h-32 object-contain border border-gray-300 rounded-lg bg-gray-50"
+                    onError={(e) => {
+                      console.error('Failed to load logo:', logoPreview)
+                      e.target.style.display = 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRemoveLogo}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="w-32 h-32 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center bg-gray-50">
+                  <Upload className="w-8 h-8 text-gray-400" />
+                </div>
+              )}
+              <div className="flex-1">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                  onChange={handleLogoChange}
+                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                />
+                <p className="mt-1 text-xs text-gray-500">PNG, JPG, GIF or WebP. Max 5MB.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Company Name */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+              <Building2 className="w-4 h-4" />
+              Company Name
+            </label>
+            <input
+              type="text"
+              value={profile.companyName || ''}
+              onChange={(e) => setProfile({ ...profile, companyName: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Your company name"
+            />
+          </div>
+
+          {/* Name */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Your Name
+            </label>
+            <input
+              type="text"
+              value={profile.name}
+              onChange={(e) => setProfile({ ...profile, name: e.target.value })}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          {/* Email */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+              <Mail className="w-4 h-4" />
+              Email
+            </label>
+            <input
+              type="email"
+              value={profile.email || ''}
+              onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+              required
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="your@email.com"
+            />
+          </div>
+
+          {/* Phone */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+              <Phone className="w-4 h-4" />
+              Phone
+            </label>
+            <input
+              type="tel"
+              value={profile.phone || ''}
+              onChange={(e) => setProfile({ ...profile, phone: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="(555) 123-4567"
+            />
+          </div>
+
+          {/* Address */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+              <MapPin className="w-4 h-4" />
+              Address
+            </label>
+            <textarea
+              value={profile.address || ''}
+              onChange={(e) => setProfile({ ...profile, address: e.target.value })}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="123 Main St, City, State ZIP"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={profileLoading}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {profileLoading ? 'Saving...' : 'Save Profile'}
+          </button>
+        </form>
+      </div>
+
+      {/* Password Section */}
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h2>
         <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
           <div>
             <label className="block text-sm text-gray-700 mb-1">Current Password</label>
-            <input type="password" value={currentPassword} onChange={(e)=>setCurrentPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
           </div>
           <div>
             <label className="block text-sm text-gray-700 mb-1">New Password</label>
-            <input type="password" value={newPassword} onChange={(e)=>setNewPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
           </div>
           <div>
             <label className="block text-sm text-gray-700 mb-1">Confirm New Password</label>
-            <input type="password" value={confirmPassword} onChange={(e)=>setConfirmPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
           </div>
-          <button type="submit" disabled={loading} className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700">{loading ? 'Saving...' : 'Save Password'}</button>
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {loading ? 'Saving...' : 'Save Password'}
+          </button>
         </form>
       </div>
     </div>
   )
 }
-
-
-

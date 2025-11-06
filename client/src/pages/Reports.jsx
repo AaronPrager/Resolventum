@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { api } from '../utils/api'
-import { DollarSign, BookOpen, AlertCircle, Users as UsersIcon, Calendar as CalendarIcon, FileText, Download } from 'lucide-react'
+import { DollarSign, BookOpen, AlertCircle, Users as UsersIcon, Calendar as CalendarIcon, FileText, Download, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Reports() {
@@ -40,6 +40,9 @@ export function Reports() {
   const [openDropdown, setOpenDropdown] = useState(null) // Track which dropdown is open: lessonId or lessonId-paymentId
   const [sortColumn, setSortColumn] = useState('date') // 'date' or 'name'
   const [sortDirection, setSortDirection] = useState('asc') // 'asc' or 'desc'
+  const [selectedOutstandingStudent, setSelectedOutstandingStudent] = useState(null) // Selected student from outstanding balances report
+  const [outstandingStudentDetails, setOutstandingStudentDetails] = useState(null) // Detailed data for selected student
+  const [loadingOutstandingDetails, setLoadingOutstandingDetails] = useState(false)
 
   // Student monthly report state
   const [students, setStudents] = useState([])
@@ -102,6 +105,167 @@ export function Reports() {
       setFamilies(data)
     } catch (err) {
       // ignore
+    }
+  }
+
+  const handleOutstandingRowClick = async (row) => {
+    try {
+      setLoadingOutstandingDetails(true)
+      setSelectedOutstandingStudent(row)
+      
+      // Check if this is a family row
+      if (row.familyId) {
+        // Fetch all students in the family
+        const { data: students } = await api.get('/students')
+        const familyStudents = students.filter(s => s.familyId === row.familyId && !s.archived)
+        
+        if (familyStudents.length === 0) {
+          toast.error('No active students found in this family')
+          return
+        }
+        
+        // Fetch all lessons and payments for all family members
+        const now = new Date()
+        const allCompletedLessons = []
+        const allPayments = []
+        const lessonPaymentsMap = new Map()
+        
+        // Get lessons and payments for each family member
+        for (const student of familyStudents) {
+          try {
+            const { data: studentData } = await api.get(`/students/${student.id}`)
+            const completedLessons = (studentData.lessons || []).filter(lesson => new Date(lesson.dateTime) < now)
+            
+            // Add student name to each lesson for display
+            completedLessons.forEach(lesson => {
+              allCompletedLessons.push({
+                ...lesson,
+                studentName: `${student.firstName} ${student.lastName}`,
+                studentId: student.id
+              })
+            })
+            
+            // Collect payments (avoid duplicates)
+            const studentPayments = studentData.payments || []
+            studentPayments.forEach(payment => {
+              if (!allPayments.find(p => p.id === payment.id)) {
+                allPayments.push(payment)
+              }
+            })
+            
+            // Get lesson payments for this student's lessons
+            for (const lesson of completedLessons) {
+              try {
+                const { data: lessonData } = await api.get(`/lessons/${lesson.id}`)
+                if (lessonData.payments) {
+                  lessonPaymentsMap.set(lesson.id, lessonData.payments.map(lp => ({
+                    paymentId: lp.payment.id,
+                    amount: lp.amount,
+                    paymentDate: lp.payment.date,
+                    paymentMethod: lp.payment.method
+                  })))
+                }
+              } catch (err) {
+                console.error('Failed to fetch lesson payments:', err)
+              }
+            }
+          } catch (err) {
+            console.error(`Failed to fetch data for student ${student.id}:`, err)
+          }
+        }
+        
+        // Sort lessons by date
+        allCompletedLessons.sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
+        
+        // Sort payments by date (newest first)
+        allPayments.sort((a, b) => new Date(b.date) - new Date(a.date))
+        
+        setOutstandingStudentDetails({
+          student: {
+            firstName: row.studentName,
+            lastName: '',
+            familyId: row.familyId
+          },
+          completedLessons: allCompletedLessons.map(lesson => ({
+            id: lesson.id,
+            date: lesson.dateTime,
+            subject: lesson.subject,
+            price: lesson.price || 0,
+            duration: lesson.duration,
+            studentName: lesson.studentName,
+            studentId: lesson.studentId,
+            payments: lessonPaymentsMap.get(lesson.id) || []
+          })),
+          allPayments: allPayments.map(payment => ({
+            id: payment.id,
+            date: payment.date,
+            amount: payment.amount,
+            method: payment.method,
+            notes: payment.notes
+          })),
+          isFamily: true,
+          familyStudents: familyStudents
+        })
+      } else {
+        // Individual student (not in a family)
+        const studentId = row.studentId
+        if (!studentId) {
+          toast.error('Cannot load details')
+          return
+        }
+        
+        const { data: studentData } = await api.get(`/students/${studentId}`)
+        
+        // Get all completed lessons (past lessons)
+        const now = new Date()
+        const completedLessons = (studentData.lessons || []).filter(lesson => new Date(lesson.dateTime) < now)
+        
+        // Get all payments and calculate how much was applied to this student's lessons
+        const allPayments = studentData.payments || []
+        
+        // Get lesson payments to see how much was actually applied to each lesson
+        const lessonPaymentsMap = new Map()
+        for (const lesson of completedLessons) {
+          try {
+            const { data: lessonData } = await api.get(`/lessons/${lesson.id}`)
+            if (lessonData.payments) {
+              lessonPaymentsMap.set(lesson.id, lessonData.payments.map(lp => ({
+                paymentId: lp.payment.id,
+                amount: lp.amount,
+                paymentDate: lp.payment.date,
+                paymentMethod: lp.payment.method
+              })))
+            }
+          } catch (err) {
+            console.error('Failed to fetch lesson payments:', err)
+          }
+        }
+        
+        setOutstandingStudentDetails({
+          student: studentData,
+          completedLessons: completedLessons.map(lesson => ({
+            id: lesson.id,
+            date: lesson.dateTime,
+            subject: lesson.subject,
+            price: lesson.price || studentData.pricePerLesson || 0,
+            duration: lesson.duration,
+            payments: lessonPaymentsMap.get(lesson.id) || []
+          })),
+          allPayments: allPayments.map(payment => ({
+            id: payment.id,
+            date: payment.date,
+            amount: payment.amount,
+            method: payment.method,
+            notes: payment.notes
+          })),
+          isFamily: false
+        })
+      }
+    } catch (error) {
+      console.error('Failed to load student details:', error)
+      toast.error('Failed to load student details')
+    } finally {
+      setLoadingOutstandingDetails(false)
     }
   }
 
@@ -712,30 +876,6 @@ export function Reports() {
     }
   }
 
-  // Aggregation: totals per month with method breakdown
-  const monthlyPaymentTotals = (() => {
-    const map = new Map()
-    for (const p of allPayments) {
-      const d = new Date(p.date)
-      if (Number.isNaN(d.getTime())) continue
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      const prev = map.get(key) || { total: 0, venmo: 0, zelle: 0, cash: 0, other: 0 }
-      const amount = Number(p.amount) || 0
-      prev.total += amount
-      const method = (p.method || 'other').toLowerCase()
-      if (method === 'venmo' || method === 'zelle' || method === 'cash' || method === 'other') {
-        prev[method] += amount
-      } else {
-        prev.other += amount
-      }
-      map.set(key, prev)
-    }
-    // Sort by month desc
-    return Array.from(map.entries())
-      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-      .map(([monthKey, vals]) => ({ monthKey, ...vals }))
-  })()
-
   if (loading) {
     return (
       <div className="min-h-[50vh] flex items-center justify-center">
@@ -845,7 +985,11 @@ export function Reports() {
                       </tr>
                     ) : (
                       outstanding.map((row) => (
-                          <tr key={row.familyId || row.studentId}>
+                          <tr 
+                            key={row.familyId || row.studentId}
+                            onClick={() => handleOutstandingRowClick(row)}
+                            className="cursor-pointer hover:bg-gray-50 transition-colors"
+                          >
                           <td className="px-6 py-3 whitespace-nowrap text-gray-900">
                             {row.familyName || row.studentName}
                           </td>
@@ -2188,6 +2332,234 @@ export function Reports() {
               </button>
         </div>
       </div>
+        </div>
+      )}
+
+      {/* Outstanding Balance Details Modal */}
+      {selectedOutstandingStudent && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          onClick={() => {
+            setSelectedOutstandingStudent(null)
+            setOutstandingStudentDetails(null)
+          }}
+        >
+          {loadingOutstandingDetails ? (
+            <div className="bg-white rounded-lg shadow-xl p-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+              <p className="mt-4 text-gray-600">Loading details...</p>
+            </div>
+          ) : outstandingStudentDetails ? (
+            <div 
+              className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Balance Details - {outstandingStudentDetails.isFamily 
+                    ? outstandingStudentDetails.student.firstName 
+                    : `${outstandingStudentDetails.student.firstName} ${outstandingStudentDetails.student.lastName || ''}`.trim()}
+                </h2>
+                {outstandingStudentDetails.isFamily && outstandingStudentDetails.familyStudents && (
+                  <p className="text-sm text-gray-500 mt-1">
+                    {outstandingStudentDetails.familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ')}
+                  </p>
+                )}
+                <p className="text-sm text-gray-500 mt-1">Click outside to close</p>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedOutstandingStudent(null)
+                  setOutstandingStudentDetails(null)
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto flex-1 p-6">
+              {/* Summary */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Balance Summary</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Total Billed</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {formatCurrency(
+                        outstandingStudentDetails.completedLessons.reduce((sum, lesson) => sum + (lesson.price || 0), 0)
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Total Paid</p>
+                    <p className="text-lg font-semibold text-green-700">
+                      {formatCurrency(
+                        outstandingStudentDetails.completedLessons.reduce((sum, lesson) => {
+                          const lessonPaid = lesson.payments.reduce((pSum, payment) => pSum + (payment.amount || 0), 0)
+                          return sum + lessonPaid
+                        }, 0)
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Outstanding Balance</p>
+                    <p className={`text-lg font-semibold ${
+                      (() => {
+                        const totalBilled = outstandingStudentDetails.completedLessons.reduce((sum, lesson) => sum + (lesson.price || 0), 0)
+                        const totalPaid = outstandingStudentDetails.completedLessons.reduce((sum, lesson) => {
+                          const lessonPaid = lesson.payments.reduce((pSum, payment) => pSum + (payment.amount || 0), 0)
+                          return sum + lessonPaid
+                        }, 0)
+                        const balance = totalBilled - totalPaid
+                        return balance > 0 ? 'text-red-600' : balance < 0 ? 'text-green-600' : 'text-gray-900'
+                      })()
+                    }`}>
+                      {formatCurrency(
+                        (() => {
+                          const totalBilled = outstandingStudentDetails.completedLessons.reduce((sum, lesson) => sum + (lesson.price || 0), 0)
+                          const totalPaid = outstandingStudentDetails.completedLessons.reduce((sum, lesson) => {
+                            const lessonPaid = lesson.payments.reduce((pSum, payment) => pSum + (payment.amount || 0), 0)
+                            return sum + lessonPaid
+                          }, 0)
+                          return totalBilled - totalPaid
+                        })()
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500 mb-1">Lessons Completed</p>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {outstandingStudentDetails.completedLessons.length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* All Lessons */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                  All Completed Lessons
+                  {outstandingStudentDetails.isFamily && outstandingStudentDetails.familyStudents && (
+                    <span className="text-sm font-normal text-gray-500 ml-2">
+                      ({outstandingStudentDetails.familyStudents.length} family member{outstandingStudentDetails.familyStudents.length !== 1 ? 's' : ''})
+                    </span>
+                  )}
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        {outstandingStudentDetails.isFamily && (
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
+                        )}
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Subject</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Duration</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Paid</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Balance</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payments</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {outstandingStudentDetails.completedLessons.length === 0 ? (
+                        <tr>
+                          <td colSpan={outstandingStudentDetails.isFamily ? 8 : 7} className="px-4 py-6 text-center text-sm text-gray-500">No completed lessons</td>
+                        </tr>
+                      ) : (
+                        outstandingStudentDetails.completedLessons
+                          .sort((a, b) => new Date(a.date) - new Date(b.date))
+                          .map((lesson) => {
+                            const lessonPaid = lesson.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0)
+                            const lessonBalance = (lesson.price || 0) - lessonPaid
+                            return (
+                              <tr key={lesson.id}>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                  {new Date(lesson.date).toLocaleDateString('en-US', { 
+                                    year: 'numeric', 
+                                    month: 'short', 
+                                    day: 'numeric',
+                                    hour: 'numeric',
+                                    minute: '2-digit'
+                                  })}
+                                </td>
+                                {outstandingStudentDetails.isFamily && (
+                                  <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{lesson.studentName || '-'}</td>
+                                )}
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{lesson.subject || '-'}</td>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{lesson.duration || '-'} min</td>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{formatCurrency(lesson.price || 0)}</td>
+                                <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-green-700">{formatCurrency(lessonPaid)}</td>
+                                <td className={`px-4 py-3 whitespace-nowrap text-sm text-right font-semibold ${lessonBalance > 0 ? 'text-red-600' : lessonBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                                  {formatCurrency(lessonBalance)}
+                                </td>
+                                <td className="px-4 py-3 text-sm text-gray-600">
+                                  {lesson.payments.length === 0 ? (
+                                    <span className="text-gray-400">No payments</span>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {lesson.payments.map((payment, idx) => (
+                                        <div key={idx} className="text-xs">
+                                          {formatCurrency(payment.amount)} on {new Date(payment.paymentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ({payment.paymentMethod})
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* All Payments */}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">All Payments</h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {outstandingStudentDetails.allPayments.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-500">No payments recorded</td>
+                        </tr>
+                      ) : (
+                        outstandingStudentDetails.allPayments
+                          .sort((a, b) => new Date(b.date) - new Date(a.date))
+                          .map((payment) => (
+                            <tr key={payment.id}>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {new Date(payment.date).toLocaleDateString('en-US', { 
+                                  year: 'numeric', 
+                                  month: 'short', 
+                                  day: 'numeric'
+                                })}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">{formatCurrency(payment.amount)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{payment.method || '-'}</td>
+                              <td className="px-4 py-3 text-sm text-gray-600">{payment.notes || '-'}</td>
+                            </tr>
+                          ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+          ) : null}
         </div>
       )}
       

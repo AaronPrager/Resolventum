@@ -1,17 +1,50 @@
-import { Outlet, Link, useLocation } from 'react-router-dom'
+import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { api } from '../utils/api'
 import { 
   Users, 
   Calendar as CalendarIcon, 
   DollarSign, 
   FileText,
   Clock,
-  LogOut
+  LogOut,
+  User
 } from 'lucide-react'
 
 export function Layout() {
   const { user, logout } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
+  const [profile, setProfile] = useState({ companyName: '', logoUrl: '' })
+  const [logoUrl, setLogoUrl] = useState(null)
+
+  useEffect(() => {
+    loadProfile()
+  }, [])
+
+  const loadProfile = async () => {
+    try {
+      const { data } = await api.get('/profile')
+      setProfile(data)
+      if (data.logoUrl) {
+        // If logoUrl is already a full URL, use it as is
+        // If it starts with /uploads, use it directly (will be proxied by Vite)
+        // Otherwise, prepend the API base URL
+        if (data.logoUrl.startsWith('http')) {
+          setLogoUrl(data.logoUrl)
+        } else if (data.logoUrl.startsWith('/uploads')) {
+          setLogoUrl(data.logoUrl)
+        } else {
+          setLogoUrl(`${api.defaults.baseURL}${data.logoUrl}`)
+        }
+      } else {
+        setLogoUrl(null)
+      }
+    } catch (error) {
+      console.error('Failed to load profile:', error)
+    }
+  }
 
   const navItems = [
     { path: '/', icon: CalendarIcon, label: 'Calendar' },
@@ -52,7 +85,25 @@ export function Layout() {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-700">{user?.name}</span>
+              <button
+                onClick={() => navigate('/account')}
+                className="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 hover:text-indigo-600 hover:bg-gray-50 rounded-md transition-colors cursor-pointer"
+                title="Edit Profile"
+              >
+                {logoUrl ? (
+                  <img 
+                    src={logoUrl} 
+                    alt={profile.companyName || 'Company logo'} 
+                    className="h-8 w-8 object-contain mr-2 rounded"
+                    onError={(e) => {
+                      e.target.style.display = 'none'
+                    }}
+                  />
+                ) : (
+                  <User className="h-4 w-4 mr-2" />
+                )}
+                <span>{profile.companyName || user?.name}</span>
+              </button>
               <button
                 onClick={logout}
                 className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"

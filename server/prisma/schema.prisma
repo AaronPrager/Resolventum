@@ -17,6 +17,8 @@ model User {
   name      String
   companyName String?
   phone       String?
+  address     String?
+  logoUrl     String?
   verified    Boolean  @default(false)
   verificationToken String?
   verificationTokenExpires DateTime?

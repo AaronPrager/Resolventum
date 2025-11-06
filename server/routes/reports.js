@@ -54,8 +54,10 @@ router.get('/summary', async (req, res) => {
         .map(s => [s.id, s.pricePerLesson || 0])
     );
     const billedTotal = billedLessons.reduce((sum, l) => {
-      const p = (l.price ?? 0) || (studentPrices.get(l.studentId) || 0);
-      return sum + p;
+      // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+      // Only fall back to student's price if lesson.price is null or undefined
+      const lessonPrice = l.price != null ? l.price : (studentPrices.get(l.studentId) || 0);
+      return sum + lessonPrice;
     }, 0);
     const paidAgg = await prisma.payment.aggregate({ where: { userId }, _sum: { amount: true } });
 
@@ -236,30 +238,86 @@ router.get('/outstanding', async (req, res) => {
         }
       });
       
-      const rows = students.map(s => {
+      // Group students by family - aggregate family members together
+      const familyRows = new Map(); // familyId -> aggregated row data
+      const individualRows = []; // rows for students not in families
+      
+      students.forEach(s => {
         const sLessons = lessonsByStudent.get(s.id) || [];
         const sLessonPayments = paymentsByStudent.get(s.id) || [];
-        const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
+        
+        // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+        // Only fall back to student's price if lesson.price is null or undefined
+        const studentBilled = sLessons.reduce((sum, l) => {
+          const lessonPrice = l.price != null ? l.price : (studentPriceMap.get(s.id) || 0);
+          return sum + lessonPrice;
+        }, 0);
+        
         // Sum up the actual amounts from LessonPayment records (this correctly handles family payments)
-        const paid = sLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
-        const balanceDue = totalBilled - paid;
-        const lastPaymentDate = lastPaymentDates.get(s.id)
+        const studentPaid = sLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+        const studentBalance = studentBilled - studentPaid;
+        const studentLastPaymentDate = lastPaymentDates.get(s.id)
           ? new Date(lastPaymentDates.get(s.id))
           : null;
         
-        // Use family name if available, otherwise use personal name
-        const displayName = familyNameMap.get(s.id) || studentMap.get(s.id) || 'Unknown';
-        
-        return {
-          studentId: s.id,
-          studentName: displayName,
-          lessonsCompleted: sLessons.length,
-          totalBilled,
-          paid,
-          balanceDue,
-          lastPaymentDate,
-        };
+        if (s.familyId) {
+          // This student is in a family - aggregate with other family members
+          if (!familyRows.has(s.familyId)) {
+            const displayName = familyNameMap.get(s.id) || `${s.lastName} Family`;
+            familyRows.set(s.familyId, {
+              familyId: s.familyId,
+              studentName: displayName,
+              lessonsCompleted: 0,
+              totalBilled: 0,
+              paid: 0,
+              balanceDue: 0,
+              lastPaymentDate: null,
+              studentIds: [] // Track which students are in this family
+            });
+          }
+          
+          const familyRow = familyRows.get(s.familyId);
+          familyRow.lessonsCompleted += sLessons.length;
+          familyRow.totalBilled += studentBilled;
+          familyRow.paid += studentPaid;
+          familyRow.balanceDue += studentBalance;
+          familyRow.studentIds.push(s.id);
+          
+          // Update last payment date if this student has a more recent payment
+          if (studentLastPaymentDate) {
+            if (!familyRow.lastPaymentDate || studentLastPaymentDate > familyRow.lastPaymentDate) {
+              familyRow.lastPaymentDate = studentLastPaymentDate;
+            }
+          }
+        } else {
+          // Individual student (not in a family)
+          const displayName = studentMap.get(s.id) || 'Unknown';
+          individualRows.push({
+            studentId: s.id,
+            studentName: displayName,
+            lessonsCompleted: sLessons.length,
+            totalBilled: studentBilled,
+            paid: studentPaid,
+            balanceDue: studentBalance,
+            lastPaymentDate: studentLastPaymentDate,
+          });
+        }
       });
+      
+      // Convert family rows to array format (use first studentId from family for compatibility)
+      const familyRowsArray = Array.from(familyRows.values()).map(familyRow => ({
+        studentId: familyRow.studentIds[0], // Use first student ID for compatibility
+        familyId: familyRow.familyId,
+        studentName: familyRow.studentName,
+        lessonsCompleted: familyRow.lessonsCompleted,
+        totalBilled: familyRow.totalBilled,
+        paid: familyRow.paid,
+        balanceDue: familyRow.balanceDue,
+        lastPaymentDate: familyRow.lastPaymentDate,
+      }));
+      
+      // Combine family rows and individual rows
+      const rows = [...familyRowsArray, ...individualRows];
 
       // Sort by balance desc
       rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
@@ -421,8 +479,10 @@ router.get('/monthly-family', async (req, res) => {
       select: { price: true, studentId: true }
     });
     const prevBilled = prevLessons.reduce((sum, l) => {
-      const price = (l.price ?? 0) || studentPriceMap.get(l.studentId) || 0;
-      return sum + price;
+      // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+      // Only fall back to student's price if lesson.price is null or undefined
+      const lessonPrice = l.price != null ? l.price : (studentPriceMap.get(l.studentId) || 0);
+      return sum + lessonPrice;
     }, 0);
 
     const prevPaymentsAgg = await prisma.payment.aggregate({
@@ -444,8 +504,10 @@ router.get('/monthly-family', async (req, res) => {
 
     const billedLessons = monthLessons.filter(l => l.dateTime < now);
     const billedThisMonth = billedLessons.reduce((sum, l) => {
-      const price = (l.price ?? 0) || studentPriceMap.get(l.studentId) || 0;
-      return sum + price;
+      // For complimentary lessons (price = 0), we should use 0, not fall back to student's price
+      // Only fall back to student's price if lesson.price is null or undefined
+      const lessonPrice = l.price != null ? l.price : (studentPriceMap.get(l.studentId) || 0);
+      return sum + lessonPrice;
     }, 0);
 
     // Payments this month
