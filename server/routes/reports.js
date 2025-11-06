@@ -73,18 +73,20 @@ router.get('/summary', async (req, res) => {
   }
 });
 
-// Outstanding balances per student or family (overall)
-// Query param: groupBy=family to group by family, otherwise by student
+// Outstanding balances per student (shows family name if available)
+// Only shows entries with outstanding balance (balanceDue > 0)
 router.get('/outstanding', async (req, res) => {
   try {
-    const groupByFamily = req.query.groupBy === 'family';
     
     // Fetch necessary data
     const now = new Date();
     const userId = req.user.id;
     const [students, lessons, payments] = await Promise.all([
       prisma.student.findMany({ 
-        where: { userId }, 
+        where: { 
+          userId,
+          archived: false // Only show active students
+        }, 
         select: { id: true, firstName: true, lastName: true, familyId: true } 
       }),
       prisma.lesson.findMany({
@@ -96,7 +98,7 @@ router.get('/outstanding', async (req, res) => {
       }),
       prisma.payment.findMany({
         where: { userId },
-        select: { id: true, studentId: true, amount: true, date: true },
+        select: { id: true, studentId: true, familyId: true, amount: true, date: true },
       }),
     ]);
 
@@ -110,94 +112,147 @@ router.get('/outstanding', async (req, res) => {
       arr.push(l);
       lessonsByStudent.set(l.studentId, arr);
     }
+    // Calculate actual paid amounts per student by looking at LessonPayment records
+    // This ensures family payments are correctly allocated based on which lessons they actually paid for
+    const lessonPayments = await prisma.lessonPayment.findMany({
+      where: {
+        payment: {
+          userId
+        }
+      },
+      include: {
+        lesson: {
+          select: { studentId: true }
+        },
+        payment: {
+          select: { id: true, amount: true, date: true, studentId: true, familyId: true }
+        }
+      }
+    });
+    
+    // Build map of student -> array of LessonPayment records
     const paymentsByStudent = new Map();
+    const lastPaymentDates = new Map(); // Track last payment date per student
+    
+    for (const lp of lessonPayments) {
+      const studentId = lp.lesson.studentId;
+      if (!paymentsByStudent.has(studentId)) {
+        paymentsByStudent.set(studentId, []);
+      }
+      
+      // Add the payment info (but only count the amount applied to this lesson)
+      const paymentInfo = {
+        id: lp.payment.id,
+        amount: lp.amount, // This is the amount from this LessonPayment, not the full payment amount
+        date: lp.payment.date,
+        studentId: lp.payment.studentId,
+        familyId: lp.payment.familyId
+      };
+      paymentsByStudent.get(studentId).push(paymentInfo);
+      
+      // Track last payment date
+      const paymentDate = new Date(lp.payment.date).getTime();
+      const currentLastDate = lastPaymentDates.get(studentId);
+      if (!currentLastDate || paymentDate > currentLastDate) {
+        lastPaymentDates.set(studentId, paymentDate);
+      }
+    }
+    
+    // Also include payments that might not be linked to lessons yet (for lastPaymentDate calculation)
+    // But don't count their amounts in the paid calculation since they're not applied
     for (const p of payments) {
-      const arr = paymentsByStudent.get(p.studentId) || [];
-      arr.push(p);
-      paymentsByStudent.set(p.studentId, arr);
+      if (p.studentId) {
+        // Individual payment - update last payment date if not already set
+        if (!lastPaymentDates.has(p.studentId)) {
+          lastPaymentDates.set(p.studentId, new Date(p.date).getTime());
+        } else {
+          const paymentDate = new Date(p.date).getTime();
+          const currentLastDate = lastPaymentDates.get(p.studentId);
+          if (paymentDate > currentLastDate) {
+            lastPaymentDates.set(p.studentId, paymentDate);
+          }
+        }
+      } else if (p.familyId) {
+        // Family payment - update last payment date for all family members
+        const familyStudentIds = students.filter(s => s.familyId === p.familyId).map(s => s.id);
+        familyStudentIds.forEach(studentId => {
+          if (!lastPaymentDates.has(studentId)) {
+            lastPaymentDates.set(studentId, new Date(p.date).getTime());
+          } else {
+            const paymentDate = new Date(p.date).getTime();
+            const currentLastDate = lastPaymentDates.get(studentId);
+            if (paymentDate > currentLastDate) {
+              lastPaymentDates.set(studentId, paymentDate);
+            }
+          }
+        });
+      }
     }
 
     const studentPriceMap = new Map(
       students.map(s => [s.id, 0])
     );
-    const studentPriceFromDb = await prisma.student.findMany({ where: { userId }, select: { id: true, pricePerLesson: true } });
+    const studentPriceFromDb = await prisma.student.findMany({ 
+      where: { 
+        userId,
+        archived: false // Only active students
+      }, 
+      select: { id: true, pricePerLesson: true } 
+    });
     studentPriceFromDb.forEach(s => studentPriceMap.set(s.id, s.pricePerLesson || 0));
 
-    if (groupByFamily) {
-      // Group by family
-      const familiesMap = new Map(); // familyId -> { students: [], totalBilled, paid, balanceDue, lastPaymentDate }
+    // Group by student - show family name if available, otherwise personal name
+      // Build a map of family names for students with families
+      const familyNameMap = new Map();
+      const familyGroups = new Map();
       
       students.forEach(s => {
-        const familyId = s.familyId || `individual_${s.id}`; // Use individual_ prefix for students without family
-        if (!familiesMap.has(familyId)) {
-          familiesMap.set(familyId, {
-            familyId,
-            studentIds: [],
-            studentNames: [],
-            lessonsCompleted: 0,
-            totalBilled: 0,
-            paid: 0,
-            balanceDue: 0,
-            lastPaymentDate: null
+        if (s.familyId) {
+          if (!familyGroups.has(s.familyId)) {
+            familyGroups.set(s.familyId, []);
+          }
+          familyGroups.get(s.familyId).push(s);
+        }
+      });
+      
+      // Generate family names
+      familyGroups.forEach((familyMembers, familyId) => {
+        // Get unique last names in the family
+        const lastNames = [...new Set(familyMembers.map(m => m.lastName).filter(Boolean))];
+        
+        // If all members have the same last name, use "Lastname Family"
+        // Otherwise, list all names
+        if (lastNames.length === 1 && lastNames[0]) {
+          const familyName = `${lastNames[0]} Family`;
+          familyMembers.forEach(m => {
+            familyNameMap.set(m.id, familyName);
+          });
+        } else {
+          // Multiple last names or no last names - use all names
+          const familyName = familyMembers.map(m => `${m.firstName} ${m.lastName}`).join(', ');
+          familyMembers.forEach(m => {
+            familyNameMap.set(m.id, familyName);
           });
         }
-        
-        const family = familiesMap.get(familyId);
-        family.studentIds.push(s.id);
-        family.studentNames.push(`${s.firstName} ${s.lastName}`);
-        
-        const sLessons = lessonsByStudent.get(s.id) || [];
-        const sPayments = paymentsByStudent.get(s.id) || [];
-        const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
-        const paid = sPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
-        
-        family.lessonsCompleted += sLessons.length;
-        family.totalBilled += totalBilled;
-        family.paid += paid;
-        
-        if (sPayments.length > 0) {
-          const studentLastPayment = new Date(Math.max(...sPayments.map(p => new Date(p.date).getTime())));
-          if (!family.lastPaymentDate || studentLastPayment > family.lastPaymentDate) {
-            family.lastPaymentDate = studentLastPayment;
-          }
-        }
       });
       
-      // Calculate balance for each family
-      familiesMap.forEach(family => {
-        family.balanceDue = family.totalBilled - family.paid;
-        family.familyName = family.studentNames.join(', ');
-      });
-      
-      const rows = Array.from(familiesMap.values())
-        .filter(f => !f.familyId.startsWith('individual_')) // Only show families with multiple students
-        .map(f => ({
-          familyId: f.familyId,
-          familyName: f.familyName,
-          studentCount: f.studentIds.length,
-          lessonsCompleted: f.lessonsCompleted,
-          totalBilled: f.totalBilled,
-          paid: f.paid,
-          balanceDue: f.balanceDue,
-          lastPaymentDate: f.lastPaymentDate,
-        }));
-      
-      rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
-      res.json(rows);
-    } else {
-      // Group by student (original behavior)
       const rows = students.map(s => {
         const sLessons = lessonsByStudent.get(s.id) || [];
-        const sPayments = paymentsByStudent.get(s.id) || [];
+        const sLessonPayments = paymentsByStudent.get(s.id) || [];
         const totalBilled = sLessons.reduce((sum, l) => sum + (((l.price ?? 0) || studentPriceMap.get(s.id) || 0)), 0);
-        const paid = sPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        // Sum up the actual amounts from LessonPayment records (this correctly handles family payments)
+        const paid = sLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
         const balanceDue = totalBilled - paid;
-        const lastPaymentDate = sPayments.length
-          ? new Date(Math.max(...sPayments.map(p => new Date(p.date).getTime())))
+        const lastPaymentDate = lastPaymentDates.get(s.id)
+          ? new Date(lastPaymentDates.get(s.id))
           : null;
+        
+        // Use family name if available, otherwise use personal name
+        const displayName = familyNameMap.get(s.id) || studentMap.get(s.id) || 'Unknown';
+        
         return {
           studentId: s.id,
-          studentName: studentMap.get(s.id) || 'Unknown',
+          studentName: displayName,
           lessonsCompleted: sLessons.length,
           totalBilled,
           paid,
@@ -208,9 +263,11 @@ router.get('/outstanding', async (req, res) => {
 
       // Sort by balance desc
       rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
+      
+      // Filter to only show entries with outstanding balance (balanceDue > 0)
+      const filteredRows = rows.filter(row => (row.balanceDue || 0) > 0);
 
-      res.json(rows);
-    }
+      res.json(filteredRows);
   } catch (error) {
     console.error('Reports outstanding error:', error);
     res.status(500).json({ message: 'Failed to load outstanding balances' });
@@ -711,7 +768,7 @@ router.get('/monthly-all', async (req, res) => {
           studentId: { in: allFamilyStudentIds },
           dateTime: { lte: prevEnd }
         },
-        select: { price: true, dateTime: true, status: true, studentId: true }
+        select: { price: true, dateTime: true, studentId: true }
       });
       const prevBilled = prevLessons.reduce((sum, l) => {
         const price = l.price ?? studentPriceMap.get(l.studentId) ?? 0;
