@@ -31,6 +31,7 @@ export function Reports() {
   const [loadingPayments, setLoadingPayments] = useState(false)
   const [showCreatePaymentModal, setShowCreatePaymentModal] = useState(false)
   const [creatingPaymentForLesson, setCreatingPaymentForLesson] = useState(null)
+  const [isCreatingPayment, setIsCreatingPayment] = useState(false)
   const [newPaymentForm, setNewPaymentForm] = useState({
     amount: '',
     date: new Date().toISOString().split('T')[0],
@@ -542,6 +543,8 @@ export function Reports() {
   // Create a new payment and link it to a lesson
   const handleCreatePayment = async (lesson) => {
     try {
+      setIsCreatingPayment(true) // Disable buttons at start
+      
       const [year, month, day] = newPaymentForm.date.split('-').map(Number)
       const localDate = new Date(year, month - 1, day, 0, 0, 0, 0)
       
@@ -637,6 +640,8 @@ export function Reports() {
     } catch (error) {
       console.error('Failed to create payment:', error)
       toast.error(error.response?.data?.message || 'Failed to create payment')
+    } finally {
+      setIsCreatingPayment(false) // Re-enable buttons when done
     }
   }
 
@@ -2186,10 +2191,22 @@ export function Reports() {
                                             </button>
                                             <button
                                               onClick={() => {
+                                                // Extract date from lesson date string (format: MM/DD/YYYY)
+                                                let lessonDate = new Date().toISOString().split('T')[0]
+                                                if (lesson.date) {
+                                                  // Parse date string like "09/12/2025" to YYYY-MM-DD
+                                                  const dateParts = lesson.date.split('/')
+                                                  if (dateParts.length === 3) {
+                                                    const month = dateParts[0].padStart(2, '0')
+                                                    const day = dateParts[1].padStart(2, '0')
+                                                    const year = dateParts[2]
+                                                    lessonDate = `${year}-${month}-${day}`
+                                                  }
+                                                }
                                                 setCreatingPaymentForLesson(lesson)
                                                 setNewPaymentForm({
                                                   amount: (lesson.price - (lesson.paidAmount || 0)).toFixed(2),
-                                                  date: new Date().toISOString().split('T')[0],
+                                                  date: lessonDate,
                                                   method: 'venmo',
                                                   notes: ''
                                                 })
@@ -2333,10 +2350,22 @@ export function Reports() {
                                                   )}
                                                   <button
                                                     onClick={() => {
+                                                      // Extract date from lesson date string (format: MM/DD/YYYY)
+                                                      let lessonDate = new Date().toISOString().split('T')[0]
+                                                      if (lesson.date) {
+                                                        // Parse date string like "09/12/2025" to YYYY-MM-DD
+                                                        const dateParts = lesson.date.split('/')
+                                                        if (dateParts.length === 3) {
+                                                          const month = dateParts[0].padStart(2, '0')
+                                                          const day = dateParts[1].padStart(2, '0')
+                                                          const year = dateParts[2]
+                                                          lessonDate = `${year}-${month}-${day}`
+                                                        }
+                                                      }
                                                       setCreatingPaymentForLesson(lesson)
                                                       setNewPaymentForm({
                                                         amount: (lesson.price - (lesson.paidAmount || 0)).toFixed(2),
-                                                        date: new Date().toISOString().split('T')[0],
+                                                        date: lessonDate,
                                                         method: 'venmo',
                                                         notes: ''
                                                       })
@@ -2632,6 +2661,7 @@ export function Reports() {
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={() => {
+                  if (isCreatingPayment) return // Prevent cancel during save
                   setShowCreatePaymentModal(false)
                   setCreatingPaymentForLesson(null)
                   setNewPaymentForm({
@@ -2641,15 +2671,17 @@ export function Reports() {
                     notes: ''
                   })
                 }}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                disabled={isCreatingPayment}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 onClick={() => handleCreatePayment(creatingPaymentForLesson)}
-                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
+                disabled={isCreatingPayment}
+                className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Create & Link Payment
+                {isCreatingPayment ? 'Creating...' : 'Create & Link Payment'}
               </button>
             </div>
           </div>

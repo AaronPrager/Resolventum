@@ -1037,7 +1037,11 @@ router.get('/packages', async (req, res) => {
         }
       }
       
-      // Recalculate hoursUsed from actual linked lessons
+      // Use the database hoursUsed value as the source of truth
+      // (It may include hours from partially paid lessons that aren't linked to this package)
+      const actualHoursUsed = pkg.hoursUsed || 0;
+      
+      // Also calculate from linked lessons for comparison/reporting
       const linkedLessons = await prisma.lesson.findMany({
         where: {
           userId,
@@ -1047,26 +1051,32 @@ router.get('/packages', async (req, res) => {
           duration: true
         }
       });
-
-      // Calculate actual hours used from linked lessons
-      const actualHoursUsed = linkedLessons.reduce((sum, lesson) => {
+      
+      const hoursFromLinkedLessons = linkedLessons.reduce((sum, lesson) => {
         return sum + (lesson.duration || 0) / 60; // Convert minutes to hours
       }, 0);
 
-      // Sync hoursUsed back to database if it differs (fix inconsistencies)
-      if (Math.abs((pkg.hoursUsed || 0) - actualHoursUsed) > 0.01) {
-        console.log(`[Package Report] Syncing hoursUsed for package ${pkg.id}: ${pkg.hoursUsed} -> ${actualHoursUsed.toFixed(2)}`);
+      // Check if package is fully used based on database hoursUsed value
+      // Use small threshold (0.01) to account for floating point precision issues
+      const hoursRemaining = pkg.totalHours - actualHoursUsed;
+      const isFullyUsed = hoursRemaining <= 0.01;
+      
+      // If package is fully used (or very close to fully used), mark it as inactive
+      if (isFullyUsed && pkg.isActive) {
+        // Also ensure hoursUsed is set to exactly totalHours to avoid precision issues
         await prisma.package.update({
           where: { id: pkg.id },
-          data: { hoursUsed: actualHoursUsed }
+          data: { 
+            isActive: false,
+            hoursUsed: pkg.totalHours // Set to exact total to avoid precision issues
+          }
         });
+        console.log(`[Package Report] Package ${pkg.id} is fully used (${actualHoursUsed.toFixed(2)}/${pkg.totalHours} hours), marking as inactive and setting hoursUsed to ${pkg.totalHours}`);
       }
-
-        const hoursRemaining = pkg.totalHours - actualHoursUsed;
         const packageHourlyRate = pkg.price / pkg.totalHours;
         const utilizationPercent = pkg.totalHours > 0 ? (actualHoursUsed / pkg.totalHours) * 100 : 0;
         const isExpired = pkg.expiresAt ? new Date(pkg.expiresAt) < new Date() : false;
-        const isFullyUsed = hoursRemaining <= 0;
+        // isFullyUsed already calculated above
 
         return {
           ...pkg,
@@ -1076,13 +1086,11 @@ router.get('/packages', async (req, res) => {
           utilizationPercent,
           isExpired,
           isFullyUsed,
-          status: !pkg.isActive 
+          status: isFullyUsed || !pkg.isActive
             ? 'Inactive' 
-            : isFullyUsed 
-              ? 'Used Up' 
-              : isExpired 
-                ? 'Expired' 
-                : 'Active'
+            : isExpired 
+              ? 'Expired' 
+              : 'Active'
         };
       } catch (error) {
         console.error(`[Package Report] Error processing package ${pkg.id}:`, error);

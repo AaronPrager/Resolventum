@@ -158,15 +158,48 @@ router.post(
       console.log(`[Package Creation] Student credit check:`);
       console.log(`  Credit after student update: $${updatedStudent.credit || 0}`);
       
+      // FIRST: Check for unused hours from previous packages and apply them first
+      // Get all active packages with unused hours (excluding the package we just created)
+      const previousPackages = await prisma.package.findMany({
+        where: {
+          userId: req.user.id,
+          studentId: req.body.studentId,
+          isActive: true,
+          id: { not: pkg.id }, // Exclude the package we just created
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }]
+        },
+        orderBy: { purchasedAt: 'asc' } // Apply oldest packages first
+      });
+
+      let unusedHoursValue = 0;
+      const packagesToUpdate = [];
+
+      for (const prevPkg of previousPackages) {
+        const availableHours = prevPkg.totalHours - prevPkg.hoursUsed;
+        if (availableHours > 0.001) { // Use small threshold to account for floating point
+          const prevPackageHourlyRate = prevPkg.price / prevPkg.totalHours;
+          const unusedValue = availableHours * prevPackageHourlyRate;
+          unusedHoursValue += unusedValue;
+          packagesToUpdate.push({
+            package: prevPkg,
+            availableHours: availableHours,
+            hourlyRate: prevPackageHourlyRate,
+            value: unusedValue
+          });
+          console.log(`[Package Creation] Found unused hours in package ${prevPkg.id}: ${availableHours.toFixed(2)} hours = $${unusedValue.toFixed(2)}`);
+        }
+      }
+
       // Apply package payment to lessons chronologically (same logic as regular payments)
-      // Combine package price and existing credit
-      let availableAmount = pkg.price + (updatedStudent.credit || 0);
+      // Combine: unused hours from previous packages + new package price + existing credit
+      let availableAmount = unusedHoursValue + pkg.price + (updatedStudent.credit || 0);
       let creditUsed = updatedStudent.credit || 0;
       
       console.log(`[Package Creation] Payment calculation:`);
+      console.log(`  Unused hours from previous packages: $${unusedHoursValue.toFixed(2)}`);
       console.log(`  pkg.price: $${pkg.price}`);
       console.log(`  updatedStudent.credit: $${updatedStudent.credit || 0}`);
-      console.log(`  availableAmount (pkg.price + credit): $${availableAmount}`);
+      console.log(`  availableAmount (unused + pkg.price + credit): $${availableAmount}`);
       console.log(`  creditUsed: $${creditUsed}`);
       
       // Get all unpaid lessons for this student, ordered by date (oldest first)
@@ -187,7 +220,14 @@ router.post(
       const lessonsPartiallyPaid = [];
       let creditToSet = 0;
       
+      // Track which previous package we're currently using
+      let currentPreviousPackageIndex = 0;
+      let remainingFromPreviousPackageHours = packagesToUpdate.length > 0 ? packagesToUpdate[0].availableHours : 0;
+      let remainingFromPreviousPackageValue = packagesToUpdate.length > 0 ? packagesToUpdate[0].value : 0;
+      let remainingFromNewPackage = pkg.price;
+      
       // Apply available amount to lessons chronologically, covering older unpaid/partial first
+      // First use unused hours from previous packages, then use new package
       for (const lesson of unpaidLessons) {
         if (availableAmount <= 0) {
           // Out of money, but continue to update prices for remaining lessons
@@ -226,14 +266,83 @@ router.post(
           continue;
         }
         
-        // Apply payment
-        if (availableAmount >= remainingNeeded) {
-          // Full payment for this lesson - mark as paid and link to package and payment
-          const lessonHours = lesson.duration / 60; // Convert minutes to hours
-          const amountToApply = remainingNeeded;
+        // Apply payment - use previous packages first, then new package
+        let amountToApply = 0;
+        let amountFromPreviousPackages = 0;
+        let amountFromNewPackage = 0;
+        let hoursUsedFromPreviousPackages = 0;
+        let hoursUsedFromNewPackage = 0;
+        let lessonPackageId = null; // Which package to link the lesson to
+        
+        // First, try to use remaining from previous packages
+        if (remainingFromPreviousPackageHours > 0.001 && remainingNeeded > 0) {
+          const prevPkgData = packagesToUpdate[currentPreviousPackageIndex];
+          if (prevPkgData) {
+            // Calculate how many hours we can use (limited by what's needed and what's available)
+            const hoursNeeded = remainingNeeded / prevPkgData.hourlyRate;
+            const hoursToUse = Math.min(remainingFromPreviousPackageHours, hoursNeeded);
+            const amountFromPrevious = hoursToUse * prevPkgData.hourlyRate;
+            
+            amountFromPreviousPackages = amountFromPrevious;
+            hoursUsedFromPreviousPackages = hoursToUse;
+            remainingFromPreviousPackageHours -= hoursToUse;
+            remainingFromPreviousPackageValue -= amountFromPrevious;
+            
+            // Update previous package hours used using exact hours
+            const updatedPrevPkg = await prisma.package.update({
+              where: { id: prevPkgData.package.id },
+              data: { hoursUsed: { increment: hoursToUse } }
+            });
+            
+            // Check if previous package is now fully used and mark as inactive
+            const newHoursUsed = updatedPrevPkg.hoursUsed;
+            const newHoursRemaining = updatedPrevPkg.totalHours - newHoursUsed;
+            if (newHoursRemaining <= 0.001 && updatedPrevPkg.isActive) {
+              await prisma.package.update({
+                where: { id: prevPkgData.package.id },
+                data: { isActive: false }
+              });
+              console.log(`[Package Creation] Package ${prevPkgData.package.id} is now fully used (${newHoursUsed.toFixed(2)}/${updatedPrevPkg.totalHours} hours), marking as inactive`);
+            }
+            
+            // Link lesson to previous package if fully paid by it, otherwise to new package
+            if (amountFromPrevious >= remainingNeeded) {
+              lessonPackageId = prevPkgData.package.id;
+            }
+          }
           
+          // Move to next previous package if current one is exhausted
+          if (remainingFromPreviousPackageHours <= 0.001 && currentPreviousPackageIndex < packagesToUpdate.length - 1) {
+            currentPreviousPackageIndex++;
+            remainingFromPreviousPackageHours = packagesToUpdate[currentPreviousPackageIndex]?.availableHours || 0;
+            remainingFromPreviousPackageValue = packagesToUpdate[currentPreviousPackageIndex]?.value || 0;
+          }
+        }
+        
+        // Then, use from new package if still needed
+        const stillNeeded = remainingNeeded - amountFromPreviousPackages;
+        if (stillNeeded > 0 && remainingFromNewPackage > 0) {
+          const amountFromNew = Math.min(remainingFromNewPackage, stillNeeded);
+          amountFromNewPackage = amountFromNew;
+          remainingFromNewPackage -= amountFromNew;
+          
+          // Calculate hours used from new package
+          hoursUsedFromNewPackage = amountFromNew / packageHourlyRate;
+          
+          // Link lesson to new package if any amount comes from it
+          if (!lessonPackageId) {
+            lessonPackageId = pkg.id;
+          }
+        }
+        
+        amountToApply = amountFromPreviousPackages + amountFromNewPackage;
+        const newPaidAmount = currentPaidAmount + amountToApply;
+        const isFullyPaid = amountToApply >= remainingNeeded;
+        
+        if (isFullyPaid) {
+          // Full payment for this lesson
           // Create or update LessonPayment record if package payment exists
-          if (pkg.paymentId) {
+          if (pkg.paymentId && amountFromNewPackage > 0) {
             await prisma.lessonPayment.upsert({
               where: {
                 lessonId_paymentId: {
@@ -242,14 +351,39 @@ router.post(
                 }
               },
               update: {
-                amount: amountToApply
+                amount: amountFromNewPackage
               },
               create: {
                 lessonId: lesson.id,
                 paymentId: pkg.paymentId,
-                amount: amountToApply
+                amount: amountFromNewPackage
               }
             });
+          }
+          
+          // Also link to previous package payment if applicable
+          if (amountFromPreviousPackages > 0) {
+            const prevPkgData = packagesToUpdate.find(p => 
+              p.package.id === lessonPackageId && p.package.paymentId
+            );
+            if (prevPkgData && prevPkgData.package.paymentId) {
+              await prisma.lessonPayment.upsert({
+                where: {
+                  lessonId_paymentId: {
+                    lessonId: lesson.id,
+                    paymentId: prevPkgData.package.paymentId
+                  }
+                },
+                update: {
+                  amount: amountFromPreviousPackages
+                },
+                create: {
+                  lessonId: lesson.id,
+                  paymentId: prevPkgData.package.paymentId,
+                  amount: amountFromPreviousPackages
+                }
+              });
+            }
           }
           
           await prisma.lesson.update({
@@ -257,26 +391,36 @@ router.post(
             data: { 
               isPaid: true,
               paidAmount: lessonPrice,
-              packageId: pkg.id // Link lesson to package
+              packageId: lessonPackageId // Link to the package that fully paid it (or new package if split)
             }
           });
           
-          // Increment package hours used
-          await prisma.package.update({
-            where: { id: pkg.id },
-            data: { hoursUsed: { increment: lessonHours } }
+          // Update new package hours used if any was used
+          if (hoursUsedFromNewPackage > 0) {
+            await prisma.package.update({
+              where: { id: pkg.id },
+              data: { hoursUsed: { increment: hoursUsedFromNewPackage } }
+            });
+          }
+          
+          lessonsMarkedPaid.push({ 
+            lessonId: lesson.id, 
+            amount: amountToApply, 
+            totalAmount: lessonPrice,
+            fromPrevious: amountFromPreviousPackages,
+            fromNew: amountFromNewPackage
           });
-          
-          lessonsMarkedPaid.push({ lessonId: lesson.id, amount: remainingNeeded, totalAmount: lessonPrice });
-          availableAmount -= remainingNeeded;
+          availableAmount -= amountToApply;
         } else {
-          // Partial payment - mark as partially paid and link to package and payment
-          const lessonHours = lesson.duration / 60; // Convert minutes to hours
-          const amountToApply = availableAmount;
-          const newPaidAmount = currentPaidAmount + availableAmount;
+          // Partial payment - mark as partially paid
+          // amountToApply is already calculated above
+          const newPaidAmount = currentPaidAmount + amountToApply;
           
-          // Create or update LessonPayment record if package payment exists
-          if (pkg.paymentId) {
+          // Calculate how many hours from packages were actually used
+          const totalHoursUsed = hoursUsedFromPreviousPackages + hoursUsedFromNewPackage;
+          
+          // Create or update LessonPayment records
+          if (pkg.paymentId && amountFromNewPackage > 0) {
             await prisma.lessonPayment.upsert({
               where: {
                 lessonId_paymentId: {
@@ -285,14 +429,37 @@ router.post(
                 }
               },
               update: {
-                amount: amountToApply
+                amount: amountFromNewPackage
               },
               create: {
                 lessonId: lesson.id,
                 paymentId: pkg.paymentId,
-                amount: amountToApply
+                amount: amountFromNewPackage
               }
             });
+          }
+          
+          // Also link to previous package payment if applicable
+          if (amountFromPreviousPackages > 0) {
+            const prevPkgData = packagesToUpdate[currentPreviousPackageIndex];
+            if (prevPkgData && prevPkgData.package.paymentId) {
+              await prisma.lessonPayment.upsert({
+                where: {
+                  lessonId_paymentId: {
+                    lessonId: lesson.id,
+                    paymentId: prevPkgData.package.paymentId
+                  }
+                },
+                update: {
+                  amount: amountFromPreviousPackages
+                },
+                create: {
+                  lessonId: lesson.id,
+                  paymentId: prevPkgData.package.paymentId,
+                  amount: amountFromPreviousPackages
+                }
+              });
+            }
           }
           
           await prisma.lesson.update({
@@ -300,18 +467,29 @@ router.post(
             data: { 
               isPaid: false,
               paidAmount: newPaidAmount,
-              packageId: pkg.id // Link lesson to package (even if partially paid)
+              packageId: lessonPackageId || pkg.id // Link to new package if partially paid
             }
           });
           
-          // Increment package hours used (even for partial payments)
-          await prisma.package.update({
-            where: { id: pkg.id },
-            data: { hoursUsed: { increment: lessonHours } }
-          });
+          // Update new package hours used if any was used
+          if (hoursUsedFromNewPackage > 0) {
+            await prisma.package.update({
+              where: { id: pkg.id },
+              data: { hoursUsed: { increment: hoursUsedFromNewPackage } }
+            });
+          }
           
-          lessonsPartiallyPaid.push({ lessonId: lesson.id, amount: availableAmount, paidAmount: newPaidAmount, remaining: lessonPrice - newPaidAmount });
-          availableAmount = 0;
+          lessonsPartiallyPaid.push({ 
+            lessonId: lesson.id, 
+            amount: amountToApply, 
+            paidAmount: newPaidAmount, 
+            remaining: lessonPrice - newPaidAmount,
+            hoursUsed: totalHoursUsed,
+            lessonHours: lessonHours,
+            fromPrevious: amountFromPreviousPackages,
+            fromNew: amountFromNewPackage
+          });
+          availableAmount -= amountToApply;
           // Continue to update prices for remaining lessons even if we're out of money
         }
       }
@@ -598,45 +776,100 @@ router.get('/:id/usage', async (req, res) => {
     const packageHourlyRate = pkg.price / pkg.totalHours;
     const studentHourlyRate = pkg.student.pricePerLesson || 0;
 
-    // Get lessons directly linked to this package
-    const linkedLessons = await prisma.lesson.findMany({
-      where: {
-        userId,
-        studentId: pkg.studentId,
-        packageId: packageId // Directly linked lessons
-      },
-      orderBy: { dateTime: 'asc' },
-      select: {
-        id: true,
-        dateTime: true,
-        duration: true,
-        subject: true,
-        price: true,
-        isPaid: true,
-        paidAmount: true,
-        createdAt: true,
-        updatedAt: true
-      }
-    });
+    // Get lessons via LessonPayment records (same as Payments page)
+    // This shows all lessons that were paid from this package's payment, not just lessons linked via packageId
+    let packageUsage = [];
+    
+    if (pkg.paymentId) {
+      // Get all LessonPayment records for this package's payment
+      const lessonPayments = await prisma.lessonPayment.findMany({
+        where: {
+          paymentId: pkg.paymentId
+        },
+        include: {
+          lesson: {
+            select: {
+              id: true,
+              dateTime: true,
+              duration: true,
+              subject: true,
+              price: true,
+              isPaid: true,
+              paidAmount: true,
+              createdAt: true,
+              updatedAt: true
+            }
+          }
+        },
+        orderBy: {
+          lesson: {
+            dateTime: 'asc'
+          }
+        }
+      });
 
-    // Format lessons for response
-    const packageUsage = linkedLessons.map(lesson => {
-      const lessonHours = lesson.duration / 60;
-      const lessonPricePerHour = lesson.price / lessonHours;
-      
-      return {
-        lessonId: lesson.id,
-        date: lesson.dateTime,
-        subject: lesson.subject,
-        duration: lesson.duration,
-        hours: lessonHours,
-        price: lesson.price,
-        pricePerHour: lessonPricePerHour,
-        isPaid: lesson.isPaid,
-        paidAmount: lesson.paidAmount,
-        likelyUsedPackage: true // These are confirmed linked to package
-      };
-    });
+      // Format lessons for response (same structure as Payments page)
+      packageUsage = lessonPayments.map(lp => {
+        const lesson = lp.lesson;
+        const lessonHours = lesson.duration / 60;
+        const lessonPricePerHour = lesson.price / lessonHours;
+        const amountFromThisPayment = lp.amount || 0;
+        
+        return {
+          lessonId: lesson.id,
+          date: lesson.dateTime,
+          subject: lesson.subject,
+          duration: lesson.duration,
+          hours: lessonHours,
+          price: lesson.price,
+          pricePerHour: lessonPricePerHour,
+          isPaid: lesson.isPaid,
+          paidAmount: lesson.paidAmount,
+          amountFromPackage: amountFromThisPayment,
+          likelyUsedPackage: true // These are confirmed linked to package payment
+        };
+      });
+    } else {
+      // Fallback: if package has no paymentId, use lessons directly linked via packageId
+      const linkedLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          studentId: pkg.studentId,
+          packageId: packageId
+        },
+        orderBy: { dateTime: 'asc' },
+        select: {
+          id: true,
+          dateTime: true,
+          duration: true,
+          subject: true,
+          price: true,
+          isPaid: true,
+          paidAmount: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      });
+
+      packageUsage = linkedLessons.map(lesson => {
+        const lessonHours = lesson.duration / 60;
+        const lessonPricePerHour = lesson.price / lessonHours;
+        
+        return {
+          lessonId: lesson.id,
+          date: lesson.dateTime,
+          subject: lesson.subject,
+          duration: lesson.duration,
+          hours: lessonHours,
+          price: lesson.price,
+          pricePerHour: lessonPricePerHour,
+          isPaid: lesson.isPaid,
+          paidAmount: lesson.paidAmount,
+          amountFromPackage: lesson.price, // Assume full amount if no payment record
+          likelyUsedPackage: true
+        };
+      });
+    }
 
     const totalHoursTracked = packageUsage.reduce((sum, lesson) => sum + lesson.hours, 0);
 
