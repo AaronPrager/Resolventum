@@ -97,7 +97,6 @@ export function Calendar() {
     subject: '',
     price: 0,
     notes: '',
-    status: 'scheduled',
     locationType: 'in-person',
     link: '',
     isRecurring: false,
@@ -251,7 +250,6 @@ export function Calendar() {
       subject: '',
       price: 0,
       notes: '',
-      status: 'scheduled',
       locationType: 'in-person',
       link: '',
       isRecurring: false,
@@ -271,7 +269,6 @@ export function Calendar() {
       subject: '',
       price: 0,
       notes: '',
-      status: 'scheduled',
       locationType: 'in-person',
       link: '',
       isRecurring: false,
@@ -424,7 +421,6 @@ export function Calendar() {
           duration,
           subject: formData.subject,
           price: parseFloat(formData.price),
-          status: formData.status,
           locationType: formData.locationType,
           allDay: formData.allDay
         }
@@ -470,6 +466,10 @@ export function Calendar() {
             // Set to end of day in local timezone to ensure inclusive end date
             endDate.setHours(23, 59, 59, 999)
             submitData.recurringEndDate = endDate.toISOString()
+          } else {
+            // If no end date is specified and none of the special cases apply, require it
+            toast.error('Please specify an end date for recurring lessons')
+            return
           }
         }
 
@@ -581,6 +581,10 @@ export function Calendar() {
           // Set to end of day in local timezone to ensure inclusive end date
           endDate.setHours(23, 59, 59, 999)
           submitData.recurringEndDate = endDate.toISOString()
+        } else {
+          // If no end date is specified and none of the special cases apply, require it
+          toast.error('Please specify an end date for recurring lessons')
+          return
         }
       } else {
         // Explicitly set to null when not recurring
@@ -762,7 +766,6 @@ export function Calendar() {
       subject: lesson.subject,
       price: lesson.price,
       notes: lesson.notes || '',
-      status: lesson.status,
       locationType: lesson.locationType || 'in-person',
       link: lesson.link || '',
       isRecurring: lesson.isRecurring || false,
@@ -807,7 +810,6 @@ export function Calendar() {
         subject: '',
         price: 0,
         notes: '',
-        status: 'scheduled',
         locationType: 'in-person',
         link: '',
         isRecurring: false,

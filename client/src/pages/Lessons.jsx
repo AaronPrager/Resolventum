@@ -71,7 +71,6 @@ export function Lessons() {
     subject: '',
     price: 0,
     notes: '',
-    status: 'scheduled',
     locationType: 'in-person',
     link: '',
     isRecurring: false,
@@ -326,7 +325,6 @@ export function Lessons() {
       duration,
       subject: formData.subject,
       price: parseFloat(formData.price),
-      status: formData.status,
       locationType: formData.locationType,
       allDay: formData.allDay
     }
@@ -344,8 +342,42 @@ export function Lessons() {
         const [year, month, day] = formData.recurringEndDate.split('-').map(Number)
         const endDate = new Date(year, month - 1, day, 23, 59, 59, 999)
         submitData.recurringEndDate = endDate.toISOString()
+      } else if (endRepeatType === 'schoolYear') {
+        // Calculate end of school year if not already set
+        const now = new Date()
+        let year = now.getFullYear()
+        if (now.getMonth() > 5) year = year + 1
+        const schoolYearEnd = new Date(year, 5, 30)
+        submitData.recurringEndDate = schoolYearEnd.toISOString()
+      } else if (endRepeatType === 'count' && formData.dateTime && formData.recurringFrequency) {
+        // Calculate end date based on number of classes
+        const numClasses = parseInt(numberOfClasses) || 1
+        const startDate = new Date(formData.dateTime)
+        const endDate = new Date(startDate)
+        const frequency = formData.recurringFrequency
+        // For N classes, we need (N-1) intervals after the first one
+        const occurrences = numberOfClasses - 1
+        switch (frequency) {
+          case 'daily':
+            endDate.setDate(endDate.getDate() + occurrences)
+            break
+          case 'weekly':
+            endDate.setDate(endDate.getDate() + (occurrences * 7))
+            break
+          case 'monthly':
+            endDate.setMonth(endDate.getMonth() + occurrences)
+            break
+          case 'yearly':
+            endDate.setFullYear(endDate.getFullYear() + occurrences)
+            break
+        }
+        // Set to end of day in local timezone to ensure inclusive end date
+        endDate.setHours(23, 59, 59, 999)
+        submitData.recurringEndDate = endDate.toISOString()
       } else {
-        submitData.recurringEndDate = null
+        // If no end date is specified and none of the special cases apply, require it
+        toast.error('Please specify an end date for recurring lessons')
+        return
       }
     }
     
@@ -528,7 +560,6 @@ export function Lessons() {
       duration,
       subject: formData.subject,
       price: parseFloat(formData.price),
-      status: formData.status,
       locationType: formData.locationType,
       allDay: formData.allDay
     }
@@ -644,7 +675,6 @@ export function Lessons() {
       subject: selectedLesson.subject,
       price: selectedLesson.price,
       notes: selectedLesson.notes || '',
-      status: selectedLesson.status,
       locationType: selectedLesson.locationType || 'in-person',
       link: selectedLesson.link || '',
       isRecurring: selectedLesson.isRecurring || false,
@@ -695,7 +725,6 @@ export function Lessons() {
       subject: '',
       price: 0,
       notes: '',
-      status: 'scheduled',
       locationType: 'in-person',
       link: '',
       isRecurring: false,
@@ -1079,7 +1108,7 @@ export function Lessons() {
                 <div className="space-y-1.5 pt-2 border-t">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Payment</h3>
-                    {selectedLesson.status !== 'cancelled' && selectedLesson.status !== 'canceled' && (
+                    {(
                       <div className="flex items-center gap-2">
                         <button
                           onClick={async () => {
@@ -1200,17 +1229,6 @@ export function Lessons() {
                   )}
                 </div>
 
-                {/* Status */}
-                <div className="space-y-1.5 pt-2 border-t">
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</h3>
-                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                    selectedLesson.status === 'completed' ? 'bg-green-100 text-green-800' :
-                    selectedLesson.status === 'cancelled' ? 'bg-red-100 text-red-800' :
-                    'bg-gray-100 text-gray-800'
-                  }`}>
-                    {selectedLesson.status}
-                  </span>
-                </div>
 
                 {/* Recurring Info */}
                 {selectedLesson.isRecurring && (
@@ -1582,19 +1600,6 @@ export function Lessons() {
                       </div>
                     </div>
 
-                    {/* Status */}
-                    <div className="flex items-center py-2">
-                      <label className="w-24 text-sm text-gray-600">Status</label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-600 focus:ring-0 px-2 py-1 text-sm"
-                      >
-                        <option value="scheduled">Scheduled</option>
-                        <option value="completed">Completed</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                    </div>
 
                     {/* Notes */}
                     <div className="flex items-start py-2">

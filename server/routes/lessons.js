@@ -237,17 +237,13 @@ router.post(
       }
 
       const { 
-        studentId, dateTime, duration, subject, price, notes, status,
+        studentId, dateTime, duration, subject, price, notes,
         locationType, link, isRecurring, recurringFrequency, recurringEndDate,
         allDay
       } = req.body;
-
-      // Helper: default status based on date (past -> completed, future -> scheduled) if not provided
-      const resolveStatus = (date) => {
-        if (status) return status;
-        const d = new Date(date);
-        return d < new Date() ? 'completed' : 'scheduled';
-      };
+      
+      // Ensure isRecurring is a boolean
+      const isRecurringBool = isRecurring === true || isRecurring === 'true';
 
       // Verify student belongs to user
       const student = await prisma.student.findFirst({
@@ -280,16 +276,29 @@ router.post(
       }
       
       console.log(`[Create Lesson] Student: ${student.firstName} ${student.lastName} (ID: ${student.id}), pricePerLesson: ${student.pricePerLesson}, duration: ${duration}min, price from request: ${price} (parsed: ${parsedPrice}, valid: ${isValidPrice}), finalPrice: ${finalPrice}`);
+      console.log(`[Create Lesson] Recurring check: isRecurring=${isRecurring} (type: ${typeof isRecurring}), isRecurringBool=${isRecurringBool}, recurringFrequency=${recurringFrequency}, recurringEndDate=${recurringEndDate}`);
+
+      // If it's a recurring lesson, validate that all required fields are present
+      if (isRecurringBool && recurringFrequency && !recurringEndDate) {
+        return res.status(400).json({ 
+          message: 'Recurring lessons require an end date. Please specify recurringEndDate.' 
+        });
+      }
 
       // If it's a recurring lesson, create multiple lessons
-      if (isRecurring && recurringFrequency && recurringEndDate) {
+      if (isRecurringBool && recurringFrequency && recurringEndDate) {
         const recurringGroupId = uuidv4();
         // Frontend sends end date as ISO string (UTC), but we need to extract the intended local date
         // Pass the ISO string directly to calculateRecurringDates, which will extract the date part
         // This avoids timezone conversion issues when creating Date objects
         console.log(`[Create Lesson] Recurring end date received: ${recurringEndDate}`);
+        console.log(`[Create Lesson] dateTime: ${dateTime}, frequency: ${recurringFrequency}, endDate: ${recurringEndDate}`);
         const dates = calculateRecurringDates(dateTime, recurringFrequency, recurringEndDate);
         console.log(`[Create Lesson] Generated ${dates.length} recurring dates. Last date: ${dates[dates.length - 1]?.toISOString()}`);
+        
+        if (dates.length === 0) {
+          console.error(`[Create Lesson] ERROR: calculateRecurringDates returned 0 dates! This should not happen.`);
+        }
         
         // Initial lesson data with prices - will be updated based on packages
         const lessonsData = dates.map(date => ({
@@ -300,7 +309,6 @@ router.post(
           subject,
           price: finalPrice, // Will be updated if packages are used
           notes: notes || null,
-          status: resolveStatus(date),
           isPaid: false, // All new lessons are unpaid
           locationType: locationType || 'in-person',
           link: link || null,
@@ -375,7 +383,6 @@ router.post(
           subject,
           price: finalPrice,
           notes: notes || null,
-          status: resolveStatus(dateTime),
           isPaid: false, // All new lessons are unpaid
           locationType: locationType || 'in-person',
           link: link || null,
@@ -532,8 +539,10 @@ router.patch('/:id/link-payment', async (req, res) => {
       return res.status(404).json({ message: 'Lesson not found' });
     }
 
-    // Verify payment belongs to user and same student
-    const payment = await prisma.payment.findFirst({
+    // Verify payment belongs to user and either:
+    // 1. Same student (individual payment)
+    // 2. Family payment for the lesson's student's family
+    let payment = await prisma.payment.findFirst({
       where: { 
         id: paymentId,
         userId: req.user.id,
@@ -541,16 +550,62 @@ router.patch('/:id/link-payment', async (req, res) => {
       }
     });
 
+    // If not found, check if it's a family payment
     if (!payment) {
-      return res.status(404).json({ message: 'Payment not found or does not belong to this student' });
+      // Get the lesson's student to check if they have a family
+      const lessonStudent = await prisma.student.findUnique({
+        where: { id: lesson.studentId },
+        select: { familyId: true }
+      });
+
+      if (lessonStudent && lessonStudent.familyId) {
+        // Check if this is a family payment for the student's family
+        payment = await prisma.payment.findFirst({
+          where: { 
+            id: paymentId,
+            userId: req.user.id,
+            familyId: lessonStudent.familyId
+          }
+        });
+      }
+    }
+
+    if (!payment) {
+      return res.status(404).json({ message: 'Payment not found or does not belong to this student or their family' });
     }
 
     // Calculate paid amount - use payment amount or remaining lesson price, whichever is smaller
+    // But first, check how much of this payment is already allocated to other lessons
     const lessonPrice = lesson.price || 0;
     const currentPaidAmount = lesson.paidAmount || 0;
     const remainingNeeded = lessonPrice - currentPaidAmount;
     const paymentAmount = payment.amount || 0;
-    const amountToApply = Math.min(paymentAmount, remainingNeeded);
+    
+    // Calculate how much of this payment has already been allocated to other lessons
+    // Also check if this lesson already has a link to this payment (for updates)
+    const existingLessonPayments = await prisma.lessonPayment.findMany({
+      where: { 
+        paymentId: paymentId
+      },
+      select: { amount: true, lessonId: true }
+    });
+    
+    // Calculate total allocated amount, but exclude any existing allocation to this lesson
+    // (since we're about to update it)
+    const alreadyAllocatedAmount = existingLessonPayments
+      .filter(lp => lp.lessonId !== req.params.id)
+      .reduce((sum, lp) => sum + (lp.amount || 0), 0);
+    
+    const availablePaymentAmount = paymentAmount - alreadyAllocatedAmount;
+    
+    // Calculate amount to apply: minimum of available payment amount and remaining needed
+    const amountToApply = Math.max(0, Math.min(availablePaymentAmount, remainingNeeded));
+    
+    if (amountToApply <= 0) {
+      return res.status(400).json({ 
+        message: `Payment has insufficient remaining amount. Payment total: $${paymentAmount.toFixed(2)}, already allocated: $${alreadyAllocatedAmount.toFixed(2)}, available: $${availablePaymentAmount.toFixed(2)}` 
+      });
+    }
 
     // Create or update LessonPayment record
     await prisma.lessonPayment.upsert({
@@ -621,6 +676,86 @@ router.patch('/:id/link-payment', async (req, res) => {
   }
 });
 
+// Unlink payment from lesson
+router.patch('/:id/unlink-payment', async (req, res) => {
+  try {
+    const { paymentId } = req.body;
+
+    if (!paymentId) {
+      return res.status(400).json({ message: 'paymentId is required' });
+    }
+
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!lesson) {
+      return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // Delete the LessonPayment record
+    await prisma.lessonPayment.deleteMany({
+      where: {
+        lessonId: req.params.id,
+        paymentId: paymentId
+      }
+    });
+
+    // Recalculate total paidAmount from remaining LessonPayment records
+    const allLessonPayments = await prisma.lessonPayment.findMany({
+      where: { lessonId: req.params.id },
+      select: { amount: true }
+    });
+    const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+    const lessonPrice = lesson.price || 0;
+
+    // Update lesson payment status
+    const updatedLesson = await prisma.lesson.update({
+      where: { id: req.params.id },
+      data: {
+        isPaid: totalPaidAmount >= lessonPrice,
+        paidAmount: totalPaidAmount
+      },
+      include: {
+        student: true,
+        payments: {
+          include: {
+            payment: {
+              select: {
+                id: true,
+                date: true,
+                amount: true,
+                method: true,
+                notes: true
+              }
+            }
+          }
+        },
+        package: {
+          select: {
+            id: true,
+            name: true,
+            totalHours: true,
+            hoursUsed: true,
+            price: true,
+            purchasedAt: true,
+            expiresAt: true
+          }
+        }
+      }
+    });
+
+    res.json(updatedLesson);
+  } catch (error) {
+    console.error('Unlink payment from lesson error:', error);
+    res.status(500).json({ message: 'Error unlinking payment from lesson' });
+  }
+});
+
 // Update lesson
 router.put('/:id', async (req, res) => {
   try {
@@ -681,7 +816,6 @@ router.put('/:id', async (req, res) => {
       subject: subject !== undefined ? subject : currentLesson.subject,
       price: finalPrice,
       notes: notes !== undefined ? (notes || null) : currentLesson.notes,
-      status: status || currentLesson.status || 'scheduled',
       locationType: locationType || currentLesson.locationType || 'in-person',
       link: link !== undefined ? (link || null) : currentLesson.link,
       // iCal-style options
@@ -708,6 +842,19 @@ router.put('/:id', async (req, res) => {
       updateData.recurringFrequency = null;
       updateData.recurringEndDate = null;
       updateData.recurringGroupId = null;
+
+      // If price changed, recalculate payment status
+      const priceChanged = finalPrice !== currentLesson.price;
+      if (priceChanged) {
+        const allLessonPayments = await prisma.lessonPayment.findMany({
+          where: { lessonId: req.params.id },
+          select: { amount: true }
+        });
+        const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+        const cappedPaidAmount = Math.min(totalPaidAmount, finalPrice);
+        updateData.paidAmount = cappedPaidAmount;
+        updateData.isPaid = cappedPaidAmount >= finalPrice;
+      }
 
       const lesson = await prisma.lesson.update({
         where: { id: req.params.id },
@@ -771,7 +918,6 @@ router.put('/:id', async (req, res) => {
           subject: updateData.subject || currentLesson.subject,
           price: updateData.price || currentLesson.price,
           notes: updateData.notes || currentLesson.notes,
-          status: updateData.status || currentLesson.status || 'scheduled',
           isPaid: false, // New lessons are unpaid
           locationType: updateData.locationType || currentLesson.locationType || 'in-person',
           link: updateData.link || currentLesson.link,
@@ -810,6 +956,19 @@ router.put('/:id', async (req, res) => {
       updateData.recurringEndDate = currentLesson.recurringEndDate;
       updateData.recurringGroupId = currentLesson.recurringGroupId;
 
+      // If price changed, recalculate payment status
+      const priceChanged = finalPrice !== currentLesson.price;
+      if (priceChanged) {
+        const allLessonPayments = await prisma.lessonPayment.findMany({
+          where: { lessonId: req.params.id },
+          select: { amount: true }
+        });
+        const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+        const cappedPaidAmount = Math.min(totalPaidAmount, finalPrice);
+        updateData.paidAmount = cappedPaidAmount;
+        updateData.isPaid = cappedPaidAmount >= finalPrice;
+      }
+
       const lesson = await prisma.lesson.update({
         where: { id: req.params.id },
         data: updateData,
@@ -826,6 +985,22 @@ router.put('/:id', async (req, res) => {
       updateData.recurringFrequency = null;
       updateData.recurringEndDate = null;
       updateData.recurringGroupId = null;
+
+      // If price changed, recalculate payment status from LessonPayment records
+      const priceChanged = finalPrice !== currentLesson.price;
+      if (priceChanged) {
+        // Recalculate paidAmount from all LessonPayment records
+        const allLessonPayments = await prisma.lessonPayment.findMany({
+          where: { lessonId: req.params.id },
+          select: { amount: true }
+        });
+        const totalPaidAmount = allLessonPayments.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+        
+        // Cap paidAmount at the new lesson price
+        const cappedPaidAmount = Math.min(totalPaidAmount, finalPrice);
+        updateData.paidAmount = cappedPaidAmount;
+        updateData.isPaid = cappedPaidAmount >= finalPrice;
+      }
 
       const lesson = await prisma.lesson.update({
         where: { id: req.params.id },
@@ -882,7 +1057,6 @@ router.put('/:id/recurring-future', async (req, res) => {
       subject: subject !== undefined ? subject : lesson.subject,
       price: price !== undefined ? parseFloat(price) : lesson.price,
       notes: notes !== undefined ? (notes || null) : lesson.notes,
-      status: status || lesson.status || 'scheduled',
       locationType: locationType || lesson.locationType || 'in-person',
       link: link !== undefined ? (link || null) : lesson.link,
       // iCal-style options
@@ -947,7 +1121,6 @@ router.put('/:id/recurring-future', async (req, res) => {
             subject: updateData.subject !== undefined ? updateData.subject : lesson.subject,
             price: updateData.price !== undefined ? updateData.price : lesson.price,
             notes: updateData.notes !== undefined ? (updateData.notes || null) : lesson.notes,
-            status: updateData.status || lesson.status || 'scheduled',
             isPaid: false, // New lessons are unpaid
             locationType: updateData.locationType || lesson.locationType || 'in-person',
             link: updateData.link !== undefined ? (updateData.link || null) : lesson.link,
@@ -1086,7 +1259,6 @@ router.put('/:id/recurring-future', async (req, res) => {
             subject: updateData.subject,
             price: updateData.price,
             notes: updateData.notes,
-            status: updateData.status,
             locationType: updateData.locationType,
             link: updateData.link,
             isRecurring: true,
@@ -1288,7 +1460,6 @@ router.put('/:id/recurring-future', async (req, res) => {
               subject: updateData.subject,
               price: updateData.price,
               notes: updateData.notes,
-              status: updateData.status,
               isPaid: false, // New lessons are unpaid
               locationType: updateData.locationType,
               link: updateData.link,
@@ -1525,7 +1696,6 @@ router.delete('/:id', async (req, res) => {
             studentId: lesson.studentId,
             isPaid: false,
             id: { not: lesson.id }, // Exclude the lesson being deleted
-            NOT: { status: { in: ['cancelled', 'canceled'] } }
           },
           orderBy: { dateTime: 'asc' }
         });
@@ -1635,7 +1805,6 @@ router.delete('/:id', async (req, res) => {
             studentId: lesson.studentId,
             isPaid: false,
             id: { not: lesson.id },
-            NOT: { status: { in: ['cancelled', 'canceled'] } }
           },
           orderBy: { dateTime: 'asc' }
         });
@@ -1735,7 +1904,6 @@ router.get('/upcoming/tomorrow', async (req, res) => {
           gte: tomorrow,
           lte: dayAfter
         },
-        status: 'scheduled'
       },
       include: {
         student: true

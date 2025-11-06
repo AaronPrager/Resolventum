@@ -175,8 +175,7 @@ router.post(
         where: {
           userId: req.user.id,
           studentId: req.body.studentId,
-          isPaid: false,  // Get lessons that aren't fully paid
-          NOT: { status: { in: ['cancelled', 'canceled'] } }
+          isPaid: false  // Get lessons that aren't fully paid
         },
         orderBy: { dateTime: 'asc' }
       });
@@ -479,14 +478,41 @@ router.delete('/all', async (req, res) => {
       where: { userId }
     });
 
+    // First, unlink all lessons from packages and reset their payment status
+    const lessonsLinkedToPackages = await prisma.lesson.findMany({
+      where: {
+        userId,
+        packageId: { not: null }
+      },
+      select: { id: true }
+    });
+
+    if (lessonsLinkedToPackages.length > 0) {
+      await prisma.lesson.updateMany({
+        where: {
+          userId,
+          packageId: { not: null }
+        },
+        data: {
+          packageId: null,
+          isPaid: false,
+          paidAmount: 0
+        }
+      });
+      console.log(`[Delete All Packages] Unlinked ${lessonsLinkedToPackages.length} lessons from packages`);
+    }
+
     // Delete all packages for this user
     await prisma.package.deleteMany({
       where: { userId }
     });
 
+    console.log(`[Delete All Packages] Deleted ${count} packages for user ${userId}`);
+
     res.json({
-      message: `Deleted ${count} packages`,
-      deletedCount: count
+      message: `Deleted ${count} packages and unlinked ${lessonsLinkedToPackages.length} lessons`,
+      deletedCount: count,
+      lessonsUnlinked: lessonsLinkedToPackages.length
     });
   } catch (error) {
     console.error('Delete all packages error:', error);
@@ -586,7 +612,6 @@ router.get('/:id/usage', async (req, res) => {
         duration: true,
         subject: true,
         price: true,
-        status: true,
         isPaid: true,
         paidAmount: true,
         createdAt: true,
@@ -607,7 +632,6 @@ router.get('/:id/usage', async (req, res) => {
         hours: lessonHours,
         price: lesson.price,
         pricePerHour: lessonPricePerHour,
-        status: lesson.status,
         isPaid: lesson.isPaid,
         paidAmount: lesson.paidAmount,
         likelyUsedPackage: true // These are confirmed linked to package

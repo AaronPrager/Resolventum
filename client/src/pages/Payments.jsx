@@ -6,32 +6,20 @@ import toast from 'react-hot-toast'
 export function Payments() {
   const [payments, setPayments] = useState([])
   const [students, setStudents] = useState([])
-  const [packages, setPackages] = useState([])
   const [selectedPayment, setSelectedPayment] = useState(null)
   const [showModal, setShowModal] = useState(false)
-  const [showPackageModal, setShowPackageModal] = useState(false)
-  const [editingPackage, setEditingPackage] = useState(null)
-  const [showPackagesList, setShowPackagesList] = useState(false)
   const [editingPayment, setEditingPayment] = useState(null)
   const [sortConfig, setSortConfig] = useState({ key: 'date', direction: 'desc' })
   const [filterStudentId, setFilterStudentId] = useState('')
   const [filterMonth, setFilterMonth] = useState('')
   const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()))
-  const [isSubmittingPackage, setIsSubmittingPackage] = useState(false)
+  const [filterMethod, setFilterMethod] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isSubmittingPackage, setIsSubmittingPackage] = useState(false)
+  const [showPackageModal, setShowPackageModal] = useState(false)
   const [showLinkLessonModal, setShowLinkLessonModal] = useState(false)
   const [availableLessons, setAvailableLessons] = useState([])
   const [selectedLessonId, setSelectedLessonId] = useState('')
-  const [formData, setFormData] = useState({
-    studentId: '',
-    amount: '',
-    method: 'venmo',
-    date: new Date().toISOString().split('T')[0],
-    notes: '',
-    applyToFamily: false
-  })
-  const [selectedStudentFamily, setSelectedStudentFamily] = useState([])
-
   const [packageForm, setPackageForm] = useState({
     studentId: '',
     name: '10-Hour Package',
@@ -41,22 +29,45 @@ export function Payments() {
     expiresAt: '',
     method: 'venmo'
   })
+  const [formData, setFormData] = useState({
+    studentId: '',
+    amount: '',
+    method: 'venmo',
+    date: new Date().toISOString().split('T')[0],
+    notes: '',
+    applyToFamily: false
+  })
+  const [selectedStudentFamily, setSelectedStudentFamily] = useState([])
+  const [families, setFamilies] = useState([])
+  const [filterFamilyId, setFilterFamilyId] = useState('')
+  const [selectedFamilyId, setSelectedFamilyId] = useState('') // Track selected family separately
 
   useEffect(() => {
     fetchPayments()
     fetchStudents()
-    fetchPackages()
+    fetchFamilies()
   }, [])
 
   useEffect(() => {
     fetchPayments()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterStudentId, filterMonth, filterYear])
+  }, [filterStudentId, filterFamilyId, filterMonth, filterYear, filterMethod])
+  
+  const fetchFamilies = async () => {
+    try {
+      const { data } = await api.get('/students/families')
+      setFamilies(data)
+    } catch (error) {
+      // ignore
+    }
+  }
 
   const fetchPayments = async () => {
     try {
       const params = {}
-      if (filterStudentId) {
+      if (filterFamilyId) {
+        params.familyId = filterFamilyId
+      } else if (filterStudentId) {
         params.studentId = filterStudentId
       }
       // Filter by month if both month and year are provided
@@ -69,6 +80,11 @@ export function Payments() {
           params.startDate = start.toISOString()
           params.endDate = end.toISOString()
         }
+      }
+      
+      // Filter by payment method if provided
+      if (filterMethod) {
+        params.method = filterMethod
       }
       
       const { data } = await api.get('/payments', { params })
@@ -114,41 +130,6 @@ export function Payments() {
     }
   }
 
-  const fetchPackages = async () => {
-    try {
-      const { data } = await api.get('/packages')
-      setPackages(data)
-    } catch (error) {
-      toast.error('Failed to load packages')
-    }
-  }
-
-  const handleTogglePackageActive = async (pkg) => {
-    try {
-      await api.put(`/packages/${pkg.id}`, {
-        isActive: !pkg.isActive
-      })
-      toast.success(`Package ${pkg.isActive ? 'deactivated' : 'activated'}`)
-      await fetchPackages()
-    } catch (error) {
-      toast.error('Failed to update package')
-    }
-  }
-
-  const handleDeletePackage = async (pkg) => {
-    const confirmMessage = `Are you sure you want to delete the package "${pkg.name}" for ${pkg.student.firstName} ${pkg.student.lastName}? This action cannot be undone.`
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    try {
-      await api.delete(`/packages/${pkg.id}`)
-      toast.success('Package deleted successfully')
-      await fetchPackages()
-    } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to delete package')
-    }
-  }
 
 
   const handleSubmit = async (e) => {
@@ -258,8 +239,15 @@ export function Payments() {
       amount: payment.amount.toString(),
       method: payment.method,
       date: localDate,
-      notes: payment.notes || ''
+      notes: payment.notes || '',
+      applyToFamily: payment.familyId ? true : false
     })
+    // If this is a family payment, set the selectedFamilyId
+    if (payment.familyId) {
+      setSelectedFamilyId(payment.familyId)
+    } else {
+      setSelectedFamilyId('')
+    }
     setShowModal(true)
   }
 
@@ -301,22 +289,45 @@ export function Payments() {
     setEditingPayment(null)
     setIsSubmitting(false)
     setSelectedStudentFamily([])
+    setSelectedFamilyId('')
   }
 
   // Update family members when student is selected
   useEffect(() => {
     if (formData.studentId && !editingPayment) {
+      // If we have a selectedFamilyId, use that to find family members
+      if (selectedFamilyId) {
+        const selectedFamily = families.find(f => f.familyId === selectedFamilyId)
+        if (selectedFamily) {
+          const primaryStudent = selectedFamily.members.find(m => m.id === formData.studentId) || selectedFamily.members[0]
+          const familyMembers = selectedFamily.members.filter(m => m.id !== primaryStudent.id)
+          setSelectedStudentFamily(familyMembers)
+          if (!formData.applyToFamily) {
+            setFormData(prev => ({ ...prev, applyToFamily: true }))
+          }
+          return
+        }
+      }
+      
+      // Otherwise, check if the selected student has a family
       const selectedStudent = students.find(s => s.id === formData.studentId)
+      
       if (selectedStudent && selectedStudent.familyId) {
-        // Find all students in the same family
+        // Individual student with family was selected
         const familyMembers = students.filter(s => 
           s.familyId === selectedStudent.familyId && 
           s.id !== selectedStudent.id && 
           !s.archived
         )
         setSelectedStudentFamily(familyMembers)
+        setSelectedFamilyId(selectedStudent.familyId)
+        // Automatically set applyToFamily to true for students in a family
+        if (!formData.applyToFamily) {
+          setFormData(prev => ({ ...prev, applyToFamily: true }))
+        }
       } else {
         setSelectedStudentFamily([])
+        setSelectedFamilyId('')
         // Reset applyToFamily if student has no family
         if (formData.applyToFamily) {
           setFormData(prev => ({ ...prev, applyToFamily: false }))
@@ -324,8 +335,11 @@ export function Payments() {
       }
     } else {
       setSelectedStudentFamily([])
+      if (!editingPayment) {
+        setSelectedFamilyId('')
+      }
     }
-  }, [formData.studentId, students, editingPayment])
+  }, [formData.studentId, selectedFamilyId, students, families, editingPayment])
 
   // Update selectedPayment when payments array changes (if it matches)
   useEffect(() => {
@@ -338,6 +352,7 @@ export function Payments() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payments])
 
+
   const resetPackageForm = () => {
     setPackageForm({
       studentId: '',
@@ -348,26 +363,44 @@ export function Payments() {
       expiresAt: '',
       method: 'venmo'
     })
-    setEditingPackage(null)
   }
-  
-  const handleEditPackage = (pkg) => {
-    setEditingPackage(pkg)
-    // Format dates in local time to avoid timezone shifts
-    const purchasedDate = new Date(pkg.purchasedAt)
-    const localPurchasedAt = `${purchasedDate.getFullYear()}-${String(purchasedDate.getMonth() + 1).padStart(2, '0')}-${String(purchasedDate.getDate()).padStart(2, '0')}`
-    const expiresDate = pkg.expiresAt ? new Date(pkg.expiresAt) : null
-    const localExpiresAt = expiresDate ? `${expiresDate.getFullYear()}-${String(expiresDate.getMonth() + 1).padStart(2, '0')}-${String(expiresDate.getDate()).padStart(2, '0')}` : ''
-    setPackageForm({
-      studentId: pkg.studentId,
-      name: pkg.name,
-      totalHours: pkg.totalHours,
-      price: pkg.price.toString(),
-      purchasedAt: localPurchasedAt,
-      expiresAt: localExpiresAt,
-      method: 'venmo'
-    })
-    setShowPackageModal(true)
+
+  const handleSubmitPackage = async (e) => {
+    e.preventDefault()
+    if (isSubmittingPackage) return // Prevent double submission
+    setIsSubmittingPackage(true)
+    try {
+      // Creating new package
+      // Create dates at local midnight to avoid timezone shifts
+      const [pYear, pMonth, pDay] = packageForm.purchasedAt.split('-').map(Number)
+      const localPurchasedAt = new Date(pYear, pMonth - 1, pDay, 0, 0, 0, 0)
+      const submitData = {
+        studentId: packageForm.studentId,
+        name: packageForm.name,
+        totalHours: parseFloat(packageForm.totalHours),
+        price: parseFloat(packageForm.price),
+        purchasedAt: localPurchasedAt.toISOString(),
+        ...(packageForm.expiresAt ? (() => {
+          const [eYear, eMonth, eDay] = packageForm.expiresAt.split('-').map(Number)
+          const localExpiresAt = new Date(eYear, eMonth - 1, eDay, 0, 0, 0, 0)
+          return { expiresAt: localExpiresAt.toISOString() }
+        })() : {})
+      }
+
+      // Add payment method to submit data
+      submitData.method = packageForm.method
+
+      await api.post('/packages', submitData)
+
+      toast.success('Package created and payment recorded')
+      await fetchPayments()
+      setShowPackageModal(false)
+      resetPackageForm()
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to create package')
+    } finally {
+      setIsSubmittingPackage(false)
+    }
   }
 
   const sortData = (key) => {
@@ -420,63 +453,6 @@ export function Payments() {
       <ChevronDown className="h-4 w-4 text-indigo-600" />
   }
 
-  const handleSubmitPackage = async (e) => {
-    e.preventDefault()
-    if (isSubmittingPackage) return // Prevent double submission
-    setIsSubmittingPackage(true)
-    try {
-      if (editingPackage) {
-        // When editing, only allow updating date, expiration, and deletion
-        // Create dates at local midnight to avoid timezone shifts
-        const [pYear, pMonth, pDay] = packageForm.purchasedAt.split('-').map(Number)
-        const localPurchasedAt = new Date(pYear, pMonth - 1, pDay, 0, 0, 0, 0)
-        const submitData = {
-          purchasedAt: localPurchasedAt.toISOString(),
-          ...(packageForm.expiresAt ? (() => {
-            const [eYear, eMonth, eDay] = packageForm.expiresAt.split('-').map(Number)
-            const localExpiresAt = new Date(eYear, eMonth - 1, eDay, 0, 0, 0, 0)
-            return { expiresAt: localExpiresAt.toISOString() }
-          })() : { expiresAt: null })
-        }
-        
-        await api.put(`/packages/${editingPackage.id}`, submitData)
-        toast.success('Package updated successfully')
-      } else {
-        // Creating new package
-        // Create dates at local midnight to avoid timezone shifts
-        const [pYear, pMonth, pDay] = packageForm.purchasedAt.split('-').map(Number)
-        const localPurchasedAt = new Date(pYear, pMonth - 1, pDay, 0, 0, 0, 0)
-        const submitData = {
-          studentId: packageForm.studentId,
-          name: packageForm.name,
-          totalHours: parseFloat(packageForm.totalHours),
-          price: parseFloat(packageForm.price),
-          purchasedAt: localPurchasedAt.toISOString(),
-          ...(packageForm.expiresAt ? (() => {
-            const [eYear, eMonth, eDay] = packageForm.expiresAt.split('-').map(Number)
-            const localExpiresAt = new Date(eYear, eMonth - 1, eDay, 0, 0, 0, 0)
-            return { expiresAt: localExpiresAt.toISOString() }
-          })() : {})
-        }
-
-        // Add payment method to submit data
-        submitData.method = packageForm.method
-
-        await api.post('/packages', submitData)
-
-        toast.success('Package created and payment recorded')
-      }
-
-      await fetchPayments()
-      await fetchPackages()
-      setShowPackageModal(false)
-      resetPackageForm()
-    } catch (error) {
-      toast.error(error.response?.data?.message || `Failed to ${editingPackage ? 'update' : 'create'} package`)
-    } finally {
-      setIsSubmittingPackage(false)
-    }
-  }
 
   // no extra filters
 
@@ -511,7 +487,18 @@ export function Payments() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => { resetPackageForm(); setShowPackageModal(true); }}
+                onClick={() => {
+                  setPackageForm({
+                    studentId: '',
+                    name: '10-Hour Package',
+                    totalHours: 10,
+                    price: '',
+                    purchasedAt: new Date().toISOString().split('T')[0],
+                    expiresAt: '',
+                    method: 'venmo'
+                  })
+                  setShowPackageModal(true)
+                }}
                 className="px-2.5 py-1.5 rounded-md text-indigo-700 bg-indigo-50 hover:bg-indigo-100 text-sm"
                 title="Add package"
               >
@@ -530,14 +517,36 @@ export function Payments() {
           {/* Filters */}
           <div className="px-4 py-2 flex flex-wrap items-center gap-2 text-sm border-b border-gray-200 bg-white">
             <select
-              value={filterStudentId}
-              onChange={(e) => setFilterStudentId(e.target.value)}
-              className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-0"
+              value={filterFamilyId || filterStudentId || ''}
+              onChange={(e) => {
+                const value = e.target.value
+                if (value.startsWith('family:')) {
+                  const familyId = value.replace('family:', '')
+                  setFilterFamilyId(familyId)
+                  setFilterStudentId('')
+                } else if (value) {
+                  setFilterStudentId(value)
+                  setFilterFamilyId('')
+                } else {
+                  setFilterStudentId('')
+                  setFilterFamilyId('')
+                }
+              }}
+              className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-0 min-w-[150px]"
             >
-              <option value="">All students</option>
-              {students.map(s => (
-                <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>
-              ))}
+              <option value="">All students/families</option>
+              <optgroup label="Families">
+                {families.map(family => (
+                  <option key={`family:${family.familyId}`} value={`family:${family.familyId}`}>
+                    {family.members.map(m => `${m.firstName} ${m.lastName}`).join(', ')}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Individual Students">
+                {students.filter(s => !s.familyId && !s.archived).map(s => (
+                  <option key={s.id} value={s.id}>{s.firstName} {s.lastName}</option>
+                ))}
+              </optgroup>
             </select>
             
             <label className="text-gray-700">Month:</label>
@@ -575,7 +584,22 @@ export function Payments() {
               placeholder="All years"
             />
             
-            {(filterStudentId || (filterMonth && filterYear)) && (
+            <label className="text-gray-700">Method:</label>
+            <select
+              value={filterMethod}
+              onChange={(e) => setFilterMethod(e.target.value)}
+              className="border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-0"
+            >
+              <option value="">All methods</option>
+              <option value="venmo">Venmo</option>
+              <option value="zelle">Zelle</option>
+              <option value="cash">Cash</option>
+              <option value="check">Check</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank Transfer</option>
+            </select>
+            
+            {(filterStudentId || filterFamilyId || (filterMonth && filterYear) || filterMethod) && (
               <span className="text-xs text-gray-500 ml-auto">
                 Showing {sortedPayments.length} payment{sortedPayments.length !== 1 ? 's' : ''}
               </span>
@@ -629,9 +653,25 @@ export function Payments() {
                     >
                       <div className="grid grid-cols-12 gap-4 items-center">
                         <div className="col-span-4">
-                          <p className="text-sm font-medium text-gray-900">
-                            {payment.student.firstName} {payment.student.lastName}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-gray-900">
+                              {payment.familyId || payment.isFamilyPayment ? (
+                                <>
+                                  {payment.familyStudents?.map(s => `${s.firstName} ${s.lastName}`).join(', ') || 
+                                   payment.student.firstName + ' ' + payment.student.lastName + ' (Family)'}
+                                </>
+                              ) : (
+                                <>
+                                  {payment.student.firstName} {payment.student.lastName}
+                                </>
+                              )}
+                            </p>
+                            {(payment.familyId || payment.isFamilyPayment) && (
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">
+                                Family
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="col-span-3">
                           <span className="text-sm text-gray-900">${parseFloat(payment.amount).toFixed(2)}</span>
@@ -655,87 +695,28 @@ export function Payments() {
           </div>
         </div>
 
-        {/* Packages List Panel - shown when showPackagesList is true */}
-        {showPackagesList && (
-          <div className="lg:col-span-2 bg-white rounded-lg shadow">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Packages</h2>
-                <p className="text-sm text-gray-500 mt-1">{packages.length} {packages.length === 1 ? 'package' : 'packages'}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowPackagesList(false)}
-                  className="p-1.5 rounded-md text-gray-600 hover:bg-gray-50 transition-colors"
-                  title="Close packages"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-            </div>
-            <div className="overflow-y-auto max-h-[590px]">
-              {packages.length === 0 ? (
-                <div className="p-8 text-center text-gray-500 text-sm">No packages</div>
-              ) : (
-                <div className="divide-y divide-gray-200">
-                  {packages.map((pkg) => {
-                    const hoursRemaining = pkg.totalHours - pkg.hoursUsed
-                    const isFullyUsed = hoursRemaining <= 0
-                    const packageHourlyRate = pkg.price / pkg.totalHours
-                    return (
-                      <div 
-                        key={pkg.id} 
-                        className="p-4 hover:bg-gray-50"
-                      >
-                        <div className="flex justify-between items-start">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h3 className="text-sm font-semibold text-gray-900">{pkg.name}</h3>
-                              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                pkg.isActive 
-                                  ? (isFullyUsed ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800')
-                                  : 'bg-gray-100 text-gray-800'
-                              }`}>
-                                {pkg.isActive ? (isFullyUsed ? 'Used Up' : 'Active') : 'Inactive'}
-                              </span>
-                            </div>
-                            <p className="text-xs text-gray-600 mt-1">
-                              {pkg.student.firstName} {pkg.student.lastName}
-                            </p>
-                            <div className="mt-2 space-y-1">
-                              <p className="text-xs text-gray-600">
-                                <span className="font-medium">Hours:</span> {hoursRemaining.toFixed(2)} / {pkg.totalHours} remaining
-                              </p>
-                              <p className="text-xs text-gray-600">
-                                <span className="font-medium">Price:</span> ${pkg.price.toFixed(2)} 
-                                <span className="text-gray-500 ml-1">(${packageHourlyRate.toFixed(2)}/hour)</span>
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                Purchased: {new Date(pkg.purchasedAt).toLocaleDateString()}
-                                {pkg.expiresAt && ` • Expires: ${new Date(pkg.expiresAt).toLocaleDateString()}`}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Details Panel - only show when packages list is not shown */}
-        {!showPackagesList && (
-          <div className="bg-white rounded-lg shadow" style={{ height: '708px' }}>
+        {/* Details Panel */}
+        <div className="bg-white rounded-lg shadow" style={{ height: '708px' }}>
           {selectedPayment ? (
             <>
               <div className="p-4 border-b border-gray-200">
                 <div className="flex justify-between items-start">
                   <div>
                     <h2 className="text-lg font-semibold text-gray-900">
-                      {selectedPayment.student.firstName} {selectedPayment.student.lastName}
+                      {selectedPayment.familyId || selectedPayment.isFamilyPayment ? (
+                        <>
+                          Family Payment
+                          {selectedPayment.familyStudents && (
+                            <div className="text-sm font-normal text-gray-600 mt-1">
+                              {selectedPayment.familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ')}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          {selectedPayment.student.firstName} {selectedPayment.student.lastName}
+                        </>
+                      )}
                     </h2>
                     <p className="text-sm text-gray-500 mt-1">Payment Details</p>
                   </div>
@@ -819,6 +800,9 @@ export function Payments() {
                     <div className="space-y-2">
                       {selectedPayment.lessons.map((lp) => {
                         const lesson = lp.lesson || lp; // Handle both new structure (lp.lesson) and old (direct lesson)
+                        const amountFromThisPayment = lp.amount || 0;
+                        const totalPaid = lesson.paidAmount || 0;
+                        const remaining = (lesson.price || 0) - totalPaid;
                         return (
                           <div key={lesson.id || lp.id} className="text-sm border border-gray-200 rounded p-2 bg-gray-50">
                             <div className="flex items-center justify-between">
@@ -827,9 +811,23 @@ export function Payments() {
                                   {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                                   {lesson.subject && ` - ${lesson.subject}`}
                                 </div>
-                                <div className="text-xs text-gray-600 mt-0.5">
-                                  ${lesson.price.toFixed(2)} • Paid from this payment: ${(lp.amount || lesson.paidAmount).toFixed(2)}
-                                  {lesson.isPaid && <span className="ml-1 text-green-600">(Fully Paid)</span>}
+                                <div className="text-xs text-gray-600 mt-0.5 space-y-0.5">
+                                  <div>
+                                    Lesson price: <span className="font-medium">${(lesson.price || 0).toFixed(2)}</span>
+                                    {remaining > 0 && (
+                                      <span className="ml-1 text-gray-500">(Remaining: ${remaining.toFixed(2)})</span>
+                                    )}
+                                  </div>
+                                  <div>
+                                    Paid from this payment: <span className="font-medium">${amountFromThisPayment.toFixed(2)}</span>
+                                    {totalPaid > 0 && (
+                                      <span className="ml-1 text-gray-500">(Total paid: ${totalPaid.toFixed(2)})</span>
+                                    )}
+                                  </div>
+                                  {lesson.isPaid && <div className="text-green-600 font-medium">✓ Fully Paid</div>}
+                                  {!lesson.isPaid && totalPaid > 0 && totalPaid < (lesson.price || 0) && (
+                                    <div className="text-yellow-600 font-medium">⚠ Partially Paid</div>
+                                  )}
                                 </div>
                               </div>
                               <a
@@ -846,6 +844,16 @@ export function Payments() {
                           </div>
                         )
                       })}
+                      {selectedPayment.lessons.length > 0 && (() => {
+                        const totalApplied = selectedPayment.lessons.reduce((sum, lp) => sum + (lp.amount || 0), 0);
+                        const remainingFromPayment = (selectedPayment.amount || 0) - totalApplied;
+                        return remainingFromPayment > 0.01 ? (
+                          <div className="text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
+                            <div>Total applied to lessons: <span className="font-medium">${totalApplied.toFixed(2)}</span></div>
+                            <div>Remaining from payment: <span className="font-medium">${remainingFromPayment.toFixed(2)}</span> (credit or applied to other lessons)</div>
+                          </div>
+                        ) : null;
+                      })()}
                     </div>
                   ) : (
                     <div className="text-sm text-gray-500">
@@ -860,8 +868,7 @@ export function Payments() {
               Select a payment to view details
             </div>
           )}
-          </div>
-        )}
+        </div>
       </div>
 
       {showModal && (
@@ -885,55 +892,94 @@ export function Payments() {
                   </div>
                   
                   <div className="space-y-4">
-                    {/* Student */}
+                    {/* Student/Family Selection */}
                     <div className="flex items-start py-2">
-                      <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
+                      <label className="w-32 text-sm text-gray-600 pt-2">
+                        {selectedStudentFamily.length > 0 ? 'Family' : 'Student'}
+                      </label>
                       <div className="flex-1">
                         <select
                           required
-                          value={formData.studentId}
-                          onChange={(e) => setFormData({ ...formData, studentId: e.target.value, applyToFamily: false })}
+                          value={selectedFamilyId ? `family:${selectedFamilyId}` : formData.studentId}
+                          onChange={(e) => {
+                            const selectedValue = e.target.value
+                            // Check if it's a family ID (starts with "family:")
+                            if (selectedValue.startsWith('family:')) {
+                              const familyId = selectedValue.replace('family:', '')
+                              const selectedFamily = families.find(f => f.familyId === familyId)
+                              
+                              if (selectedFamily && selectedFamily.members.length > 0) {
+                                // Family selected - use first member as primary student
+                                const primaryStudent = selectedFamily.members[0]
+                                setSelectedFamilyId(familyId)
+                                setFormData({ 
+                                  ...formData, 
+                                  studentId: primaryStudent.id, 
+                                  applyToFamily: true
+                                })
+                              }
+                            } else {
+                              // Individual student selected
+                              const selected = students.find(s => s.id === selectedValue)
+                              setSelectedFamilyId('') // Clear family selection
+                              setFormData({ 
+                                ...formData, 
+                                studentId: selectedValue, 
+                                applyToFamily: selected?.familyId ? true : false
+                              })
+                            }
+                          }}
                           disabled={editingPayment}
                           className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:bg-gray-50 disabled:cursor-not-allowed"
                         >
-                          <option value="">Select student</option>
-                          {students.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.firstName} {s.lastName}
-                            </option>
-                          ))}
+                          <option value="">Select family or student</option>
+                          {families.length > 0 && (
+                            <optgroup label="Families">
+                              {families.map(family => (
+                                <option key={`family:${family.familyId}`} value={`family:${family.familyId}`}>
+                                  {family.members.map(m => `${m.firstName} ${m.lastName}`).join(', ')}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {students.filter(s => !s.familyId && !s.archived).length > 0 && (
+                            <optgroup label="Individual Students">
+                              {students.filter(s => !s.familyId && !s.archived).map(s => (
+                                <option key={s.id} value={s.id}>
+                                  {s.firstName} {s.lastName}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
                         </select>
+                        {selectedStudentFamily.length > 0 && !editingPayment && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Family payment will be applied to all members
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    {/* Apply to Family - Only show if student has family members */}
+                    {/* Family payment info - show when student has family */}
                     {selectedStudentFamily.length > 0 && !editingPayment && (
                       <div className="flex items-start py-2">
                         <label className="w-32 text-sm text-gray-600 pt-2"></label>
                         <div className="flex-1">
-                          <label className="flex items-start gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={formData.applyToFamily}
-                              onChange={(e) => setFormData({ ...formData, applyToFamily: e.target.checked })}
-                              className="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-                            />
-                            <div className="flex-1">
-                              <span className="text-sm text-gray-700 font-medium">Apply payment to entire family</span>
-                              <div className="text-xs text-gray-500 mt-1">
-                                This payment will be applied to all family members:
-                                <ul className="list-disc list-inside mt-1 ml-2">
-                                  <li>Selected student: {students.find(s => s.id === formData.studentId)?.firstName} {students.find(s => s.id === formData.studentId)?.lastName}</li>
-                                  {selectedStudentFamily.map(member => (
-                                    <li key={member.id}>{member.firstName} {member.lastName}</li>
-                                  ))}
-                                </ul>
-                                <span className="block mt-1 text-gray-600">
-                                  Each family member will receive a payment of ${formData.amount || '0.00'} applied to their lessons.
-                                </span>
-                              </div>
-                            </div>
-                          </label>
+                          <div className="text-xs text-gray-600 bg-blue-50 p-3 rounded-md border border-blue-200">
+                            <p className="font-medium text-blue-900 mb-1">Family Payment Required</p>
+                            <p className="text-gray-700 mb-2">
+                              This payment of ${formData.amount || '0.00'} will be applied to unpaid lessons across all family members:
+                            </p>
+                            <ul className="list-disc list-inside ml-2 text-gray-700">
+                              <li>{students.find(s => s.id === formData.studentId)?.firstName} {students.find(s => s.id === formData.studentId)?.lastName}</li>
+                              {selectedStudentFamily.map(member => (
+                                <li key={member.id}>{member.firstName} {member.lastName}</li>
+                              ))}
+                            </ul>
+                            <p className="text-gray-700 mt-2">
+                              The payment will be applied chronologically to the oldest unpaid lessons across all family members. Any remaining amount will be added to family credit.
+                            </p>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1089,9 +1135,7 @@ export function Payments() {
               <form onSubmit={handleSubmitPackage}>
                 <div className="bg-white px-6 pt-5 pb-4">
                   <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-lg font-semibold text-gray-900">
-                      {editingPackage ? 'Edit Package' : 'Add Package'}
-                    </h3>
+                    <h3 className="text-lg font-semibold text-gray-900">Add Package</h3>
                     <button
                       type="button"
                       onClick={() => { setShowPackageModal(false); resetPackageForm(); }}
@@ -1102,142 +1146,107 @@ export function Payments() {
                   </div>
 
                   <div className="space-y-4">
-                    {!editingPackage && (
-                      <>
-                        {/* Student */}
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
-                          <div className="flex-1">
-                            <select
-                              required
-                              disabled={isSubmittingPackage}
-                              value={packageForm.studentId}
-                              onChange={(e) => {
-                                const selectedStudent = students.find(s => s.id === e.target.value)
-                                setPackageForm({ 
-                                  ...packageForm, 
-                                  studentId: e.target.value,
-                                  // Prefill totalHours and price when student is selected
-                                  totalHours: selectedStudent ? 10 : packageForm.totalHours,
-                                  price: selectedStudent?.pricePerPackage || packageForm.price
-                                })
-                              }}
-                              className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <option value="">Select student</option>
-                              {students.filter(s => !s.archived && s.usePackages).map(s => (
-                                <option key={s.id} value={s.id}>
-                                  {s.firstName} {s.lastName}
-                                  {s.pricePerPackage ? ` ($${parseFloat(s.pricePerPackage).toFixed(2)})` : ''}
-                                </option>
-                              ))}
-                            </select>
-                            {students.filter(s => !s.archived && s.usePackages).length === 0 && (
-                              <p className="text-xs text-gray-500 mt-1">No students with packages enabled</p>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Package Name */}
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
-                          <input
-                            type="text"
-                            required
-                            disabled={isSubmittingPackage}
-                            value={packageForm.name}
-                            onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
-                            className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                            placeholder="e.g., 10-Hour Package"
-                          />
-                        </div>
-
-                        {/* Total Hours - Read-only, pre-filled */}
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
-                          <input
-                            type="number"
-                            min="0.01"
-                            step="any"
-                            required
-                            value={packageForm.totalHours}
-                            readOnly
-                            className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
-                            placeholder="10"
-                          />
-                          <span className="text-xs text-gray-500 ml-2 pt-1.5">(Auto-filled from student settings)</span>
-                        </div>
-
-                        {/* Price - Read-only, pre-filled */}
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
-                          <div className="flex-1 flex items-center gap-1">
-                            <span className="text-sm text-gray-600">$</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              required
-                              value={packageForm.price}
-                              readOnly
-                              className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
-                              placeholder="0.00"
-                            />
-                            <span className="text-xs text-gray-500 ml-2">(Auto-filled from student's package price)</span>
-                          </div>
-                        </div>
-                      </>
-                    )}
-                    
-                    {editingPackage && (
-                      <>
-                        {/* Read-only fields when editing */}
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
-                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
-                            {editingPackage.student.firstName} {editingPackage.student.lastName}
-                          </div>
-                        </div>
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
-                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
-                            {editingPackage.name}
-                          </div>
-                        </div>
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
-                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
-                            {editingPackage.totalHours}
-                          </div>
-                        </div>
-                        <div className="flex items-start py-2">
-                          <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
-                          <div className="flex-1 pt-1.5 text-sm text-gray-900">
-                            ${editingPackage.price.toFixed(2)}
-                          </div>
-                        </div>
-                      </>
-                    )}
-
-                    {!editingPackage && (
-                      <div className="flex items-start py-2">
-                        <label className="w-32 text-sm text-gray-600 pt-2">Method</label>
-                        <div className="flex-1">
-                          <select
-                            required
-                            disabled={isSubmittingPackage}
-                            value={packageForm.method}
-                            onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
-                            className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <option value="venmo">Venmo</option>
-                            <option value="zelle">Zelle</option>
-                            <option value="cash">Cash</option>
-                            <option value="other">Other</option>
-                          </select>
-                        </div>
+                    {/* Student */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Student</label>
+                      <div className="flex-1">
+                        <select
+                          required
+                          disabled={isSubmittingPackage}
+                          value={packageForm.studentId}
+                          onChange={(e) => {
+                            const selectedStudent = students.find(s => s.id === e.target.value)
+                            setPackageForm({ 
+                              ...packageForm, 
+                              studentId: e.target.value,
+                              // Prefill totalHours and price when student is selected
+                              totalHours: selectedStudent ? 10 : packageForm.totalHours,
+                              price: selectedStudent?.pricePerPackage || packageForm.price
+                            })
+                          }}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="">Select student</option>
+                          {students.filter(s => !s.archived && s.usePackages).map(s => (
+                            <option key={s.id} value={s.id}>
+                              {s.firstName} {s.lastName}
+                              {s.pricePerPackage ? ` ($${parseFloat(s.pricePerPackage).toFixed(2)})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                        {students.filter(s => !s.archived && s.usePackages).length === 0 && (
+                          <p className="text-xs text-gray-500 mt-1">No students with packages enabled</p>
+                        )}
                       </div>
-                    )}
+                    </div>
+
+                    {/* Package Name */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Name</label>
+                      <input
+                        type="text"
+                        required
+                        disabled={isSubmittingPackage}
+                        value={packageForm.name}
+                        onChange={(e) => setPackageForm({ ...packageForm, name: e.target.value })}
+                        className="flex-1 border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        placeholder="e.g., 10-Hour Package"
+                      />
+                    </div>
+
+                    {/* Total Hours - Read-only, pre-filled */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Hours</label>
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="any"
+                        required
+                        value={packageForm.totalHours}
+                        readOnly
+                        className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
+                        placeholder="10"
+                      />
+                      <span className="text-xs text-gray-500 ml-2 pt-1.5">(Auto-filled from student settings)</span>
+                    </div>
+
+                    {/* Price - Read-only, pre-filled */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Price</label>
+                      <div className="flex-1 flex items-center gap-1">
+                        <span className="text-sm text-gray-600">$</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          required
+                          value={packageForm.price}
+                          readOnly
+                          className="w-32 border-0 border-b border-gray-300 bg-gray-50 px-0 py-1.5 text-sm text-gray-600 cursor-not-allowed"
+                          placeholder="0.00"
+                        />
+                        <span className="text-xs text-gray-500 ml-2">(Auto-filled from student's package price)</span>
+                      </div>
+                    </div>
+
+                    {/* Method */}
+                    <div className="flex items-start py-2">
+                      <label className="w-32 text-sm text-gray-600 pt-2">Method</label>
+                      <div className="flex-1">
+                        <select
+                          required
+                          disabled={isSubmittingPackage}
+                          value={packageForm.method}
+                          onChange={(e) => setPackageForm({ ...packageForm, method: e.target.value })}
+                          className="w-full border-0 border-b border-gray-300 focus:border-indigo-500 focus:ring-0 px-0 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <option value="venmo">Venmo</option>
+                          <option value="zelle">Zelle</option>
+                          <option value="cash">Cash</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                    </div>
 
                     {/* Purchased At */}
                     <div className="flex items-start py-2">
@@ -1279,7 +1288,7 @@ export function Payments() {
                     disabled={isSubmittingPackage}
                     className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isSubmittingPackage ? 'Creating...' : editingPackage ? 'Save Package' : 'Create Package'}
+                    {isSubmittingPackage ? 'Creating...' : 'Create Package'}
                   </button>
                 </div>
               </form>
@@ -1318,7 +1327,6 @@ export function Payments() {
                   >
                     <option value="">-- Select a lesson --</option>
                     {availableLessons
-                      .filter(lesson => lesson.status !== 'cancelled' && lesson.status !== 'canceled')
                       .map((lesson) => (
                         <option key={lesson.id} value={lesson.id}>
                           {new Date(lesson.dateTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
@@ -1328,7 +1336,7 @@ export function Payments() {
                         </option>
                       ))}
                   </select>
-                  {availableLessons.filter(l => l.status !== 'cancelled' && l.status !== 'canceled').length === 0 && (
+                  {availableLessons.length === 0 && (
                     <p className="text-xs text-gray-500 mt-1">No lessons found for this student</p>
                   )}
                 </div>

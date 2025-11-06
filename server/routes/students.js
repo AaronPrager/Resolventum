@@ -248,7 +248,6 @@ router.post('/:id/recalculate-prices', async (req, res) => {
       where: {
         studentId: req.params.id,
         userId: req.user.id,
-        NOT: { status: { in: ['cancelled', 'canceled'] } }
       },
       orderBy: { dateTime: 'asc' }
     });
