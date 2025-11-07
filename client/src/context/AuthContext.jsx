@@ -22,7 +22,6 @@ export function AuthProvider({ children }) {
         api.defaults.headers.common['Authorization'] = `Bearer ${token}`
         setUser(userData)
       } catch (error) {
-        console.error('Error parsing stored user:', error)
         localStorage.removeItem('token')
         localStorage.removeItem('user')
       }

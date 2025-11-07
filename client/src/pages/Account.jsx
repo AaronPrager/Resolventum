@@ -31,7 +31,6 @@ export function Account() {
   }, [])
 
   const loadProfile = async () => {
-    try {
       const { data } = await api.get('/profile')
       setProfile(data)
       if (data.logoUrl) {
@@ -48,9 +47,6 @@ export function Account() {
       } else {
         setLogoPreview(null)
       }
-    } catch (error) {
-      console.error('Failed to load profile:', error)
-    }
   }
 
   const handleProfileSubmit = async (e) => {
@@ -176,7 +172,6 @@ export function Account() {
                     alt="Company logo" 
                     className="w-32 h-32 object-contain border border-gray-300 rounded-lg bg-gray-50"
                     onError={(e) => {
-                      console.error('Failed to load logo:', logoPreview)
                       e.target.style.display = 'none'
                     }}
                   />

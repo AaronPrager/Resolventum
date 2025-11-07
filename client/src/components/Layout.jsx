@@ -24,13 +24,9 @@ export function Layout() {
   }, [])
 
   const loadProfile = async () => {
-    try {
       const { data } = await api.get('/profile')
       setProfile(data)
       if (data.logoUrl) {
-        // If logoUrl is already a full URL, use it as is
-        // If it starts with /uploads, use it directly (will be proxied by Vite)
-        // Otherwise, prepend the API base URL
         if (data.logoUrl.startsWith('http')) {
           setLogoUrl(data.logoUrl)
         } else if (data.logoUrl.startsWith('/uploads')) {
@@ -41,9 +37,6 @@ export function Layout() {
       } else {
         setLogoUrl(null)
       }
-    } catch (error) {
-      console.error('Failed to load profile:', error)
-    }
   }
 
   const navItems = [

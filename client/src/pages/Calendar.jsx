@@ -336,7 +336,6 @@ export function Calendar() {
           // Refresh students list
           await fetchStudents()
         } catch (error) {
-          console.error('Create student error:', error)
           const errorMessage = error.response?.data?.message || 
                               error.response?.data?.errors?.[0]?.msg || 
                               'Failed to create student'
@@ -483,7 +482,6 @@ export function Calendar() {
         resetForm()
       }
     } catch (error) {
-      console.error('Save lesson error:', error)
       toast.error('Failed to save lesson')
     }
   }
@@ -515,7 +513,6 @@ export function Calendar() {
           // Refresh students list
           await fetchStudents()
         } catch (error) {
-          console.error('Create student error:', error)
           const errorMessage = error.response?.data?.message || 
                               error.response?.data?.errors?.[0]?.msg || 
                               'Failed to create student'

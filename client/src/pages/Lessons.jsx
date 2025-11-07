@@ -233,7 +233,6 @@ export function Lessons() {
       })
       setAvailablePayments(data || [])
     } catch (error) {
-      console.error('Error fetching payments:', error)
       toast.error('Failed to load payments')
       setAvailablePayments([])
     }
@@ -394,7 +393,6 @@ export function Lessons() {
         
         // Check if lesson is recurring
         if (selectedLesson.isRecurring && formData.isRecurring) {
-          console.log('[Lesson Edit] Entering recurring lesson check')
           // Check if series-level properties are changing (start date, end date, or frequency)
           // If so, automatically apply to whole series without showing options
           

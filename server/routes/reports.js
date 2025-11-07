@@ -1509,11 +1509,7 @@ router.get('/lessons-payments', async (req, res) => {
           existing: existing,
           duplicate: lesson
         });
-        console.log(`[Lessons Payments Report] Found logical duplicate:`, {
-          existing: { id: existing.id, dateTime: existing.dateTime, price: existing.price, studentId: existing.studentId, studentName: `${existing.student.firstName} ${existing.student.lastName}`, payments: existing.payments.length },
-          duplicate: { id: lesson.id, dateTime: lesson.dateTime, price: lesson.price, studentId: lesson.studentId, studentName: `${lesson.student.firstName} ${lesson.student.lastName}`, payments: lesson.payments.length },
-          dateKey: dateKey
-        });
+
         // Merge payments from the duplicate into the existing
         const existingPaymentIds = new Set(
           (existing.payments || []).map(lp => lp.payment.id)
@@ -1532,70 +1528,11 @@ router.get('/lessons-payments', async (req, res) => {
       }
     });
     
-    // Log all dateKeys that have multiple lessons (potential duplicates)
-    dateKeysSeen.forEach((lessons, key) => {
-      if (lessons.length > 1) {
-        console.log(`[Lessons Payments Report] DateKey "${key}" has ${lessons.length} lessons:`, lessons);
-      }
-    });
-    
-    // Debug: Log all lessons for "Daniel Khotline" on Sep 12
-    const danielKhotlineLessons = uniqueLessons.filter(l => {
-      const name = `${l.student.firstName} ${l.student.lastName}`;
-      const dateTime = new Date(l.dateTime);
-      return name.includes('Khotline') && dateTime.getMonth() === 8 && dateTime.getDate() === 12 && dateTime.getFullYear() === 2025;
-    });
-    if (danielKhotlineLessons.length > 0) {
-      console.log(`[Lessons Payments Report] Found ${danielKhotlineLessons.length} lesson(s) for Daniel Khotline on Sep 12, 2025:`, danielKhotlineLessons.map(l => {
-        const dateTime = new Date(l.dateTime);
-        const dateOnly = new Date(dateTime.getFullYear(), dateTime.getMonth(), dateTime.getDate());
-        const dateStr = dateOnly.toISOString().split('T')[0];
-        const priceRounded = Math.round((l.price || 0) * 100) / 100;
-        const dateKey = `${l.studentId}-${dateStr}-${priceRounded}`;
-        return {
-          id: l.id,
-          studentId: l.studentId,
-          dateTime: l.dateTime,
-          dateStr: dateStr,
-          price: l.price,
-          priceRounded: priceRounded,
-          dateKey: dateKey,
-          payments: l.payments.length
-        };
-      }));
-    }
-    
     // Use lessonsToKeep instead of filtering (more efficient)
     if (logicalDuplicates.length > 0) {
       const duplicateIds = logicalDuplicates.map(d => d.duplicate.id);
       uniqueLessons = lessonsToKeep;
-      console.warn(`[Lessons Payments Report] Found ${logicalDuplicates.length} logical duplicate lesson(s) (same student, date, price), merged. Duplicate IDs to remove:`, duplicateIds);
-      console.log(`[Lessons Payments Report] Logical duplicates details:`, logicalDuplicates.map(d => ({
-        existingId: d.existing.id,
-        duplicateId: d.duplicate.id,
-        studentId: d.existing.studentId,
-        studentName: `${d.existing.student.firstName} ${d.existing.student.lastName}`,
-        dateTime: d.existing.dateTime,
-        duplicateDateTime: d.duplicate.dateTime,
-        price: d.existing.price
-      })));
-    } else {
-      // Log if we expected to find duplicates but didn't
-      const potentialDuplicates = Array.from(dateKeysSeen.entries()).filter(([key, lessons]) => lessons.length > 1);
-      if (potentialDuplicates.length > 0) {
-        console.log(`[Lessons Payments Report] Found ${potentialDuplicates.length} dateKeys with multiple lessons but they weren't merged. This might indicate an issue with the matching logic.`);
-      }
-    }
-    
-    // Log if duplicates were found (for debugging)
-    if (lessons.length !== uniqueLessons.length) {
-      const duplicateIds = lessons.filter((l, i, arr) => arr.findIndex(lesson => lesson.id === l.id) !== i).map(l => l.id);
-      console.warn(`[Lessons Payments Report] Found ${lessons.length - uniqueLessons.length} duplicate lesson(s) by ID, deduplicated. Duplicate IDs:`, duplicateIds);
-    }
-    
-    // Always log lesson count for debugging
-    console.log(`[Lessons Payments Report] ${lessons.length} lessons fetched, ${uniqueLessons.length} unique lessons after deduplication`);
-
+    } 
     // Format the data for the report
     const reportData = uniqueLessons.map(lesson => {
       const dateTime = new Date(lesson.dateTime);
@@ -1633,9 +1570,6 @@ router.get('/lessons-payments', async (req, res) => {
         payments: payments
       };
     });
-
-    // Log the final report data count for debugging
-    console.log(`[Lessons Payments Report] Final report: ${reportData.length} lessons, IDs:`, reportData.map(l => l.id));
     
     // Log if there are any lessons with the same studentId, date, and price
     const finalDuplicates = [];
@@ -1648,9 +1582,6 @@ router.get('/lessons-payments', async (req, res) => {
         }
       });
     });
-    if (finalDuplicates.length > 0) {
-      console.warn(`[Lessons Payments Report] WARNING: Found ${finalDuplicates.length} duplicate lessons in final report data:`, finalDuplicates);
-    }
 
     res.json({
       month: month || null,
@@ -1658,8 +1589,7 @@ router.get('/lessons-payments', async (req, res) => {
       lessons: reportData
     });
   } catch (error) {
-    console.error('Lessons payments report error:', error);
-    res.status(500).json({ message: 'Error fetching lessons payments report' });
+    res.status(500).json({ message: 'Error fetching s report' });
   }
 });
 
