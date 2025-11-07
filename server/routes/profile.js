@@ -52,7 +52,9 @@ router.get('/', authenticateToken, async (req, res) => {
         companyName: true,
         phone: true,
         address: true,
-        logoUrl: true
+        logoUrl: true,
+        venmo: true,
+        zelle: true
       }
     });
 
@@ -72,9 +74,9 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
   try {
     console.log('Profile update request received');
     console.log('File received:', req.file ? `Yes (${req.file.size} bytes, ${req.file.mimetype})` : 'No');
-    console.log('Body fields:', { name: req.body.name, email: req.body.email, companyName: req.body.companyName, phone: req.body.phone, address: req.body.address });
+    console.log('Body fields:', { name: req.body.name, email: req.body.email, companyName: req.body.companyName, phone: req.body.phone, address: req.body.address, venmo: req.body.venmo, zelle: req.body.zelle });
     
-    const { name, email, companyName, phone, address } = req.body;
+    const { name, email, companyName, phone, address, venmo, zelle } = req.body;
     const updateData = {};
 
     if (name !== undefined) updateData.name = name;
@@ -99,6 +101,8 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
     if (companyName !== undefined) updateData.companyName = companyName || null;
     if (phone !== undefined) updateData.phone = phone || null;
     if (address !== undefined) updateData.address = address || null;
+    if (venmo !== undefined) updateData.venmo = venmo || null;
+    if (zelle !== undefined) updateData.zelle = zelle || null;
 
     // Handle logo upload
     if (req.file) {
@@ -176,7 +180,9 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
         companyName: true,
         phone: true,
         address: true,
-        logoUrl: true
+        logoUrl: true,
+        venmo: true,
+        zelle: true
       }
     });
 

@@ -5,3 +5,4 @@ ALTER TABLE "Payment" ADD COLUMN "familyId" TEXT;
 CREATE INDEX "Payment_familyId_idx" ON "Payment"("familyId");
 
 
+

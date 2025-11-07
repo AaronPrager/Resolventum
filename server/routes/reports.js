@@ -2,6 +2,7 @@ import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import prisma from '../prisma/client.js';
 import { generateBalanceStatementPDF } from '../utils/balanceStatementGenerator.js';
+import { generateMonthlyStatementPDF } from '../utils/monthlyStatementGenerator.js';
 
 const router = express.Router();
 
@@ -290,13 +291,13 @@ router.get('/outstanding', async (req, res) => {
               familyRow.lastPaymentDate = studentLastPaymentDate;
             }
           }
-        } else {
+    } else {
           // Individual student (not in a family)
           const displayName = studentMap.get(s.id) || 'Unknown';
           individualRows.push({
-            studentId: s.id,
+          studentId: s.id,
             studentName: displayName,
-            lessonsCompleted: sLessons.length,
+          lessonsCompleted: sLessons.length,
             totalBilled: studentBilled,
             paid: studentPaid,
             balanceDue: studentBalance,
@@ -322,7 +323,7 @@ router.get('/outstanding', async (req, res) => {
 
       // Sort by balance desc
       rows.sort((a, b) => (b.balanceDue || 0) - (a.balanceDue || 0));
-      
+
       // Filter to only show entries with outstanding balance (balanceDue > 0)
       const filteredRows = rows.filter(row => (row.balanceDue || 0) > 0);
 
@@ -796,7 +797,8 @@ router.get('/monthly-all', async (req, res) => {
         firstName: true,
         lastName: true,
         pricePerLesson: true,
-        credit: true
+        credit: true,
+        familyId: true
       },
       orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }]
     });
@@ -953,9 +955,139 @@ router.get('/monthly-all', async (req, res) => {
       return;
     }
 
-    // Process each student individually (for non-family reports)
-    const studentReports = await Promise.all(
-      students.map(async (student) => {
+    // Group students by familyId for aggregation
+    const studentsByFamily = new Map();
+    const individualStudents = [];
+    
+    students.forEach(student => {
+      if (student.familyId) {
+        if (!studentsByFamily.has(student.familyId)) {
+          studentsByFamily.set(student.familyId, []);
+        }
+        studentsByFamily.get(student.familyId).push(student);
+      } else {
+        individualStudents.push(student);
+      }
+    });
+
+    // Process families (aggregated)
+    const familyReports = await Promise.all(
+      Array.from(studentsByFamily.entries()).map(async ([familyId, familyStudents]) => {
+        const allFamilyStudentIds = familyStudents.map(s => s.id);
+        const studentPriceMap = new Map(familyStudents.map(s => [s.id, s.pricePerLesson || 0]));
+        const familyName = familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ');
+
+        // Previous balance: all family members combined
+        const prevLessons = await prisma.lesson.findMany({
+          where: {
+            userId,
+            studentId: { in: allFamilyStudentIds },
+            dateTime: { lte: prevEnd }
+          },
+          select: { price: true, dateTime: true, studentId: true }
+        });
+        const prevBilled = prevLessons.reduce((sum, l) => {
+          const price = l.price ?? studentPriceMap.get(l.studentId) ?? 0;
+          return sum + price;
+        }, 0);
+
+        // Previous payments: include family payments (by familyId) and individual student payments
+        const prevFamilyPayments = await prisma.payment.findMany({
+          where: { 
+            userId, 
+            familyId: familyId,
+            date: { lte: prevEnd }
+          },
+          select: { amount: true }
+        });
+        const prevIndividualPayments = await prisma.payment.findMany({
+          where: { 
+            userId, 
+            studentId: { in: allFamilyStudentIds },
+            familyId: null,
+            date: { lte: prevEnd }
+          },
+          select: { amount: true }
+        });
+        const prevPaid = prevFamilyPayments.reduce((sum, p) => sum + (p.amount || 0), 0) +
+                        prevIndividualPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const previousBalance = prevBilled - prevPaid;
+
+        // In-month lessons: all family members
+        const monthLessons = await prisma.lesson.findMany({
+          where: {
+            userId,
+            studentId: { in: allFamilyStudentIds },
+            dateTime: { gte: start, lte: end }
+          },
+          include: {
+            student: { select: { firstName: true, lastName: true } }
+          },
+          orderBy: { dateTime: 'asc' }
+        });
+
+        // Bill lessons that are in the past
+        const billedLessons = monthLessons.filter(l => l.dateTime < now);
+        const billedThisMonth = billedLessons.reduce((sum, l) => {
+          const price = l.price ?? studentPriceMap.get(l.studentId) ?? 0;
+          return sum + price;
+        }, 0);
+
+        // Payments this month: family payments (counted once) + individual payments
+        const familyPayments = await prisma.payment.findMany({
+          where: { 
+            userId, 
+            familyId: familyId,
+            date: { gte: start, lte: end }
+          },
+          include: {
+            student: { select: { firstName: true, lastName: true } }
+          },
+          orderBy: { date: 'desc' }
+        });
+        const individualPayments = await prisma.payment.findMany({
+          where: { 
+            userId, 
+            studentId: { in: allFamilyStudentIds },
+            familyId: null,
+            date: { gte: start, lte: end }
+          },
+          include: {
+            student: { select: { firstName: true, lastName: true } }
+          },
+          orderBy: { date: 'desc' }
+        });
+        const allPayments = [...familyPayments, ...individualPayments];
+        const paidThisMonth = allPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+        // Combined credit for all family members
+        const creditBalance = familyStudents.reduce((sum, s) => sum + (s.credit || 0), 0);
+
+        // Ending balance
+        const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+
+        return {
+          familyId: familyId,
+          familyName: familyName,
+          studentCount: familyStudents.length,
+          studentIds: allFamilyStudentIds,
+          previousBalance,
+          billedThisMonth,
+          paidThisMonth,
+          endingBalance,
+          creditBalance,
+          lessonsCount: monthLessons.length,
+          billedLessonsCount: billedLessons.length,
+          paymentsCount: allPayments.length,
+          lessons: monthLessons,
+          payments: allPayments
+        };
+      })
+    );
+
+    // Process individual students (for non-family reports)
+    const individualStudentReports = await Promise.all(
+      individualStudents.map(async (student) => {
         const fallbackPrice = student.pricePerLesson || 0;
 
         // Previous balance: billed through end of prior month minus payments through end of prior month
@@ -1043,15 +1175,23 @@ router.get('/monthly-all', async (req, res) => {
       })
     );
 
+    // Combine family and individual reports, sorting by name
+    const allReports = [...familyReports, ...individualStudentReports];
+    allReports.sort((a, b) => {
+      const nameA = a.familyName || a.studentName || '';
+      const nameB = b.familyName || b.studentName || '';
+      return nameA.localeCompare(nameB);
+    });
+
     // Calculate totals
     const totals = {
-      previousBalance: studentReports.reduce((sum, s) => sum + s.previousBalance, 0),
-      billedThisMonth: studentReports.reduce((sum, s) => sum + s.billedThisMonth, 0),
-      paidThisMonth: studentReports.reduce((sum, s) => sum + s.paidThisMonth, 0),
-      endingBalance: studentReports.reduce((sum, s) => sum + s.endingBalance, 0),
-      totalLessons: studentReports.reduce((sum, s) => sum + s.lessonsCount, 0),
-      totalBilledLessons: studentReports.reduce((sum, s) => sum + s.billedLessonsCount, 0),
-      totalPayments: studentReports.reduce((sum, s) => sum + s.paymentsCount, 0)
+      previousBalance: allReports.reduce((sum, s) => sum + s.previousBalance, 0),
+      billedThisMonth: allReports.reduce((sum, s) => sum + s.billedThisMonth, 0),
+      paidThisMonth: allReports.reduce((sum, s) => sum + s.paidThisMonth, 0),
+      endingBalance: allReports.reduce((sum, s) => sum + s.endingBalance, 0),
+      totalLessons: allReports.reduce((sum, s) => sum + s.lessonsCount, 0),
+      totalBilledLessons: allReports.reduce((sum, s) => sum + s.billedLessonsCount, 0),
+      totalPayments: allReports.reduce((sum, s) => sum + s.paymentsCount, 0)
     };
 
     res.json({
@@ -1062,7 +1202,7 @@ router.get('/monthly-all', async (req, res) => {
         end: end.toISOString()
       },
       totals,
-      students: studentReports
+      students: allReports
     });
   } catch (error) {
     console.error('Monthly all students report error:', error);
@@ -1171,7 +1311,7 @@ router.get('/packages', async (req, res) => {
           duration: true
         }
       });
-      
+
       const hoursFromLinkedLessons = linkedLessons.reduce((sum, lesson) => {
         return sum + (lesson.duration || 0) / 60; // Convert minutes to hours
       }, 0);
@@ -1208,9 +1348,9 @@ router.get('/packages', async (req, res) => {
           isFullyUsed,
           status: isFullyUsed || !pkg.isActive
             ? 'Inactive' 
-            : isExpired 
-              ? 'Expired' 
-              : 'Active'
+              : isExpired 
+                ? 'Expired' 
+                : 'Active'
         };
       } catch (error) {
         console.error(`[Package Report] Error processing package ${pkg.id}:`, error);
@@ -1269,20 +1409,20 @@ router.get('/lessons-payments', async (req, res) => {
 
     // Add date filter if month and year are provided
     if (month && year) {
-      const m = parseInt(month);
-      const y = parseInt(year);
-      
-      if (isNaN(m) || m < 1 || m > 12 || isNaN(y)) {
-        return res.status(400).json({ message: 'Invalid month or year' });
-      }
+    const m = parseInt(month);
+    const y = parseInt(year);
+    
+    if (isNaN(m) || m < 1 || m > 12 || isNaN(y)) {
+      return res.status(400).json({ message: 'Invalid month or year' });
+    }
 
-      // Calculate date range for the month
-      const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
-      const end = new Date(y, m, 0, 23, 59, 59, 999);
-      
+    // Calculate date range for the month
+    const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+    const end = new Date(y, m, 0, 23, 59, 59, 999);
+
       whereClause.dateTime = {
-        gte: start,
-        lte: end
+          gte: start,
+          lte: end
       };
     }
 
@@ -1511,7 +1651,7 @@ router.get('/lessons-payments', async (req, res) => {
     if (finalDuplicates.length > 0) {
       console.warn(`[Lessons Payments Report] WARNING: Found ${finalDuplicates.length} duplicate lessons in final report data:`, finalDuplicates);
     }
-    
+
     res.json({
       month: month || null,
       year: year || null,
@@ -1520,6 +1660,715 @@ router.get('/lessons-payments', async (req, res) => {
   } catch (error) {
     console.error('Lessons payments report error:', error);
     res.status(500).json({ message: 'Error fetching lessons payments report' });
+  }
+});
+
+// Get balance statement data (JSON) for a student
+router.get('/balance-statement/:studentId', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const userId = req.user.id;
+
+    // Fetch user profile for company info
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        companyName: true,
+        phone: true,
+        email: true,
+        address: true,
+        logoUrl: true,
+        venmo: true,
+        zelle: true
+      }
+    });
+
+    // Fetch student data
+    const student = await prisma.student.findFirst({
+      where: { 
+        id: studentId,
+        userId 
+      },
+      include: {
+        lessons: {
+          where: {
+            dateTime: { lt: new Date() } // Only completed lessons
+          },
+          orderBy: { dateTime: 'asc' }
+        },
+        payments: {
+          orderBy: { date: 'desc' }
+        }
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Get lesson payments to see how much was actually applied to each lesson
+    const lessonPaymentsMap = new Map();
+    for (const lesson of student.lessons) {
+      try {
+        const lessonData = await prisma.lesson.findUnique({
+          where: { id: lesson.id },
+          include: {
+            payments: {
+              include: {
+                payment: {
+                  select: {
+                    id: true,
+                    amount: true,
+                    date: true,
+                    method: true
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        if (lessonData && lessonData.payments) {
+          lessonPaymentsMap.set(lesson.id, lessonData.payments.map(lp => ({
+            paymentId: lp.payment.id,
+            amount: lp.amount,
+            paymentDate: lp.payment.date,
+            paymentMethod: lp.payment.method
+          })));
+        }
+      } catch (err) {
+        console.error('Failed to fetch lesson payments:', err);
+      }
+    }
+
+    // Prepare statement data
+    const completedLessons = student.lessons.map(lesson => ({
+      id: lesson.id,
+      date: lesson.dateTime,
+      subject: lesson.subject,
+      price: lesson.price != null ? lesson.price : (student.pricePerLesson || 0),
+      duration: lesson.duration,
+      payments: lessonPaymentsMap.get(lesson.id) || []
+    }));
+
+    const allPayments = student.payments.map(payment => ({
+      id: payment.id,
+      date: payment.date,
+      amount: payment.amount,
+      method: payment.method,
+      notes: payment.notes
+    }));
+
+    // Check if this is a family
+    const isFamily = !!student.familyId;
+    let familyStudents = null;
+    if (isFamily) {
+      familyStudents = await prisma.student.findMany({
+        where: {
+          familyId: student.familyId,
+          userId,
+          archived: false
+        },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          parentEmail: true
+        }
+      });
+
+      // If family, fetch all family members' lessons and payments
+      const familyStudentIds = familyStudents.map(s => s.id);
+      const familyLessons = await prisma.lesson.findMany({
+        where: {
+          studentId: { in: familyStudentIds },
+          dateTime: { lt: new Date() }
+        },
+        orderBy: { dateTime: 'asc' }
+      });
+
+      const familyPayments = await prisma.payment.findMany({
+        where: {
+          OR: [
+            { studentId: { in: familyStudentIds } },
+            { familyId: student.familyId }
+          ]
+        },
+        orderBy: { date: 'desc' }
+      });
+
+      // Get lesson payments for all family lessons
+      const familyLessonPaymentsMap = new Map();
+      for (const lesson of familyLessons) {
+        try {
+          const lessonData = await prisma.lesson.findUnique({
+            where: { id: lesson.id },
+            include: {
+              payments: {
+                include: {
+                  payment: {
+                    select: {
+                      id: true,
+                      amount: true,
+                      date: true,
+                      method: true
+                    }
+                  }
+                }
+              },
+              student: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
+            }
+          });
+
+          if (lessonData && lessonData.payments) {
+            familyLessonPaymentsMap.set(lesson.id, {
+              payments: lessonData.payments.map(lp => ({
+                paymentId: lp.payment.id,
+                amount: lp.amount,
+                paymentDate: lp.payment.date,
+                paymentMethod: lp.payment.method
+              })),
+              studentName: `${lessonData.student.firstName} ${lessonData.student.lastName}`
+            });
+          }
+        } catch (err) {
+          console.error('Failed to fetch family lesson payments:', err);
+        }
+      }
+
+      // Update completed lessons with family data
+      completedLessons.length = 0; // Clear and rebuild
+      familyLessons.forEach(lesson => {
+        const lessonPaymentData = familyLessonPaymentsMap.get(lesson.id);
+        completedLessons.push({
+          id: lesson.id,
+          date: lesson.dateTime,
+          subject: lesson.subject,
+          price: lesson.price != null ? lesson.price : 0,
+          duration: lesson.duration,
+          studentName: lessonPaymentData?.studentName || 'Unknown',
+          studentId: lesson.studentId,
+          payments: lessonPaymentData?.payments || []
+        });
+      });
+
+      // Update payments (avoid duplicates)
+      allPayments.length = 0;
+      const seenPaymentIds = new Set();
+      familyPayments.forEach(payment => {
+        if (!seenPaymentIds.has(payment.id)) {
+          seenPaymentIds.add(payment.id);
+          allPayments.push({
+            id: payment.id,
+            date: payment.date,
+            amount: payment.amount,
+            method: payment.method,
+            notes: payment.notes
+          });
+        }
+      });
+    }
+
+    res.json({
+      student: {
+        firstName: student.firstName,
+        lastName: student.lastName,
+        email: student.email,
+        phone: student.phone,
+        parentEmail: student.parentEmail,
+        familyId: student.familyId
+      },
+      completedLessons,
+      allPayments,
+      companyName: user?.companyName || null,
+      companyPhone: user?.phone || null,
+      companyEmail: user?.email || null,
+      companyAddress: user?.address || null,
+      logoUrl: user?.logoUrl || null,
+      venmo: user?.venmo || null,
+      zelle: user?.zelle || null,
+      isFamily,
+      familyStudents
+    });
+  } catch (error) {
+    console.error('Get balance statement error:', error);
+    res.status(500).json({ message: 'Error fetching balance statement' });
+  }
+});
+
+// Generate balance statement PDF for a student
+router.post('/balance-statement/:studentId', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const userId = req.user.id;
+
+    // Fetch user profile for company info
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        companyName: true,
+        phone: true,
+        email: true,
+        address: true,
+        logoUrl: true,
+        venmo: true,
+        zelle: true
+      }
+    });
+
+    // Fetch student data
+    const student = await prisma.student.findFirst({
+      where: { 
+        id: studentId,
+        userId 
+      },
+      include: {
+        lessons: {
+          where: {
+            dateTime: { lt: new Date() } // Only completed lessons
+          },
+          orderBy: { dateTime: 'asc' }
+        },
+        payments: {
+          orderBy: { date: 'desc' }
+        }
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ message: 'Student not found' });
+    }
+
+    // Get lesson payments to see how much was actually applied to each lesson
+    const lessonPaymentsMap = new Map();
+    for (const lesson of student.lessons) {
+      try {
+        const lessonData = await prisma.lesson.findUnique({
+          where: { id: lesson.id },
+          include: {
+            payments: {
+              include: {
+                payment: {
+                  select: {
+                    id: true,
+                    amount: true,
+                    date: true,
+                    method: true
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        if (lessonData && lessonData.payments) {
+          lessonPaymentsMap.set(lesson.id, lessonData.payments.map(lp => ({
+            paymentId: lp.payment.id,
+            amount: lp.amount,
+            paymentDate: lp.payment.date,
+            paymentMethod: lp.payment.method
+          })));
+        }
+      } catch (err) {
+        console.error('Failed to fetch lesson payments:', err);
+      }
+    }
+
+    // Prepare statement data
+    const completedLessons = student.lessons.map(lesson => ({
+      id: lesson.id,
+      date: lesson.dateTime,
+      subject: lesson.subject,
+      price: lesson.price != null ? lesson.price : (student.pricePerLesson || 0),
+      duration: lesson.duration,
+      payments: lessonPaymentsMap.get(lesson.id) || []
+    }));
+
+    const allPayments = student.payments.map(payment => ({
+      id: payment.id,
+      date: payment.date,
+      amount: payment.amount,
+      method: payment.method,
+      notes: payment.notes
+    }));
+
+    // Check if this is a family
+    const isFamily = !!student.familyId;
+    let familyStudents = null;
+    if (isFamily) {
+      familyStudents = await prisma.student.findMany({
+        where: {
+          familyId: student.familyId,
+          userId,
+          archived: false
+        },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          parentEmail: true
+        }
+      });
+
+      // If family, fetch all family members' lessons and payments
+      const familyStudentIds = familyStudents.map(s => s.id);
+      const familyLessons = await prisma.lesson.findMany({
+        where: {
+          studentId: { in: familyStudentIds },
+          dateTime: { lt: new Date() }
+        },
+        orderBy: { dateTime: 'asc' }
+      });
+
+      const familyPayments = await prisma.payment.findMany({
+        where: {
+          OR: [
+            { studentId: { in: familyStudentIds } },
+            { familyId: student.familyId }
+          ]
+        },
+        orderBy: { date: 'desc' }
+      });
+
+      // Get lesson payments for all family lessons
+      const familyLessonPaymentsMap = new Map();
+      for (const lesson of familyLessons) {
+        try {
+          const lessonData = await prisma.lesson.findUnique({
+            where: { id: lesson.id },
+            include: {
+              payments: {
+                include: {
+                  payment: {
+                    select: {
+                      id: true,
+                      amount: true,
+                      date: true,
+                      method: true
+                    }
+                  }
+                }
+              },
+              student: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
+            }
+          });
+
+          if (lessonData && lessonData.payments) {
+            familyLessonPaymentsMap.set(lesson.id, {
+              payments: lessonData.payments.map(lp => ({
+                paymentId: lp.payment.id,
+                amount: lp.amount,
+                paymentDate: lp.payment.date,
+                paymentMethod: lp.payment.method
+              })),
+              studentName: `${lessonData.student.firstName} ${lessonData.student.lastName}`
+            });
+          }
+        } catch (err) {
+          console.error('Failed to fetch family lesson payments:', err);
+        }
+      }
+
+      // Update completed lessons with family data
+      completedLessons.length = 0; // Clear and rebuild
+      familyLessons.forEach(lesson => {
+        const lessonPaymentData = familyLessonPaymentsMap.get(lesson.id);
+        completedLessons.push({
+          id: lesson.id,
+          date: lesson.dateTime,
+          subject: lesson.subject,
+          price: lesson.price != null ? lesson.price : 0,
+          duration: lesson.duration,
+          studentName: lessonPaymentData?.studentName || 'Unknown',
+          studentId: lesson.studentId,
+          payments: lessonPaymentData?.payments || []
+        });
+      });
+
+      // Update payments (avoid duplicates)
+      allPayments.length = 0;
+      const seenPaymentIds = new Set();
+      familyPayments.forEach(payment => {
+        if (!seenPaymentIds.has(payment.id)) {
+          seenPaymentIds.add(payment.id);
+          allPayments.push({
+            id: payment.id,
+            date: payment.date,
+            amount: payment.amount,
+            method: payment.method,
+            notes: payment.notes
+          });
+        }
+      });
+    }
+
+    const statementData = {
+      student: {
+        firstName: student.firstName,
+        lastName: student.lastName,
+        email: student.email,
+        phone: student.phone,
+        familyId: student.familyId
+      },
+      completedLessons,
+      allPayments,
+      companyName: user?.companyName || null,
+      companyPhone: user?.phone || null,
+      companyEmail: user?.email || null,
+      companyAddress: user?.address || null,
+      logoUrl: user?.logoUrl || null,
+      venmo: user?.venmo || null,
+      zelle: user?.zelle || null,
+      isFamily,
+      familyStudents
+    };
+
+    // Generate PDF
+    const pdfBytes = await generateBalanceStatementPDF(statementData);
+
+    const studentName = isFamily 
+      ? (user?.companyName || 'Family')
+      : `${student.lastName || student.firstName}`;
+
+    // Convert Uint8Array to Buffer if needed
+    const pdfBuffer = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+
+    const filename = `balance-statement-${studentName.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`;
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.end(pdfBuffer, 'binary');
+  } catch (error) {
+    console.error('Generate balance statement error:', error);
+    res.status(500).json({ message: 'Error generating balance statement' });
+  }
+});
+
+// Generate monthly statement PDF
+router.post('/monthly-statement', async (req, res) => {
+  try {
+    const { month, year, studentId, familyId } = req.query;
+    
+    if (!month || !year) {
+      return res.status(400).json({ message: 'Month and year are required' });
+    }
+
+    const userId = req.user.id;
+    const m = parseInt(month);
+    const y = parseInt(year);
+
+    // Fetch user profile for company info
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        companyName: true,
+        phone: true,
+        email: true,
+        address: true,
+        logoUrl: true,
+        venmo: true,
+        zelle: true
+      }
+    });
+
+    let statementData;
+
+    if (familyId) {
+      // Fetch family monthly statement data
+      const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+      const end = new Date(y, m, 0, 23, 59, 59, 999);
+      const now = new Date();
+      const prevEnd = new Date(start.getTime() - 1);
+
+      const familyStudents = await prisma.student.findMany({
+        where: { familyId, userId },
+        select: { id: true, firstName: true, lastName: true, pricePerLesson: true }
+      });
+
+      if (familyStudents.length === 0) {
+        return res.status(404).json({ message: 'Family not found' });
+      }
+
+      const studentIds = familyStudents.map(s => s.id);
+      const studentPriceMap = new Map(familyStudents.map(s => [s.id, s.pricePerLesson || 0]));
+
+      // Previous balance
+      const prevLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          studentId: { in: studentIds },
+          dateTime: { lte: prevEnd, lt: now }
+        },
+        select: { price: true, studentId: true }
+      });
+      const prevBilled = prevLessons.reduce((sum, l) => {
+        const lessonPrice = l.price != null ? l.price : (studentPriceMap.get(l.studentId) || 0);
+        return sum + lessonPrice;
+      }, 0);
+
+      const prevPaymentsAgg = await prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: { userId, studentId: { in: studentIds }, date: { lte: prevEnd } }
+      });
+      const prevPaid = prevPaymentsAgg._sum.amount || 0;
+      const previousBalance = prevBilled - prevPaid;
+
+      // In-month lessons
+      const monthLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          studentId: { in: studentIds },
+          dateTime: { gte: start, lte: end }
+        },
+        include: { student: { select: { firstName: true, lastName: true } } }
+      });
+
+      const billedLessons = monthLessons.filter(l => l.dateTime < now);
+      const billedThisMonth = billedLessons.reduce((sum, l) => {
+        const lessonPrice = l.price != null ? l.price : (studentPriceMap.get(l.studentId) || 0);
+        return sum + lessonPrice;
+      }, 0);
+
+      // Payments this month
+      const payments = await prisma.payment.findMany({
+        where: { userId, studentId: { in: studentIds }, date: { gte: start, lte: end } },
+        include: { student: { select: { firstName: true, lastName: true } } },
+        orderBy: { date: 'desc' }
+      });
+      const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+      const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+      const familyName = familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ');
+
+      statementData = {
+        familyName,
+        familyId,
+        month: m,
+        year: y,
+        previousBalance,
+        billedThisMonth,
+        paidThisMonth,
+        endingBalance,
+        lessonsThisMonth: monthLessons,
+        payments,
+        studentCount: familyStudents.length,
+        isFamily: true
+      };
+    } else if (studentId) {
+      // Fetch individual student monthly statement
+      const student = await prisma.student.findFirst({
+        where: { id: studentId, userId },
+        select: { id: true, firstName: true, lastName: true, familyId: true, pricePerLesson: true, credit: true }
+      });
+
+      if (!student) {
+        return res.status(404).json({ message: 'Student not found' });
+      }
+
+      const start = new Date(y, m - 1, 1, 0, 0, 0, 0);
+      const end = new Date(y, m, 0, 23, 59, 59, 999);
+      const now = new Date();
+      const prevEnd = new Date(start.getTime() - 1);
+
+      const fallbackPrice = student.pricePerLesson || 0;
+
+      // Previous balance
+      const prevLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          studentId,
+          dateTime: { lte: prevEnd }
+        },
+        select: { price: true, dateTime: true }
+      });
+      const prevBilled = prevLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+
+      const prevPaymentsAgg = await prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: { userId, studentId, date: { lte: prevEnd } }
+      });
+      const prevPaid = prevPaymentsAgg._sum.amount || 0;
+      const previousBalance = prevBilled - prevPaid;
+
+      // In-month lessons
+      const monthLessons = await prisma.lesson.findMany({
+        where: {
+          userId,
+          studentId,
+          dateTime: { gte: start, lte: end }
+        },
+        include: { student: { select: { firstName: true, lastName: true } } }
+      });
+
+      const billedLessons = monthLessons.filter(l => l.dateTime < now);
+      const billedThisMonth = billedLessons.reduce((sum, l) => sum + (l.price ?? fallbackPrice), 0);
+
+      // Payments this month
+      const payments = await prisma.payment.findMany({
+        where: { userId, studentId, date: { gte: start, lte: end } },
+        orderBy: { date: 'desc' }
+      });
+      const paidThisMonth = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+      const endingBalance = previousBalance + billedThisMonth - paidThisMonth;
+      const creditBalance = student.credit || 0;
+
+      statementData = {
+        studentName: `${student.firstName ?? ''} ${student.lastName ?? ''}`.trim(),
+        month: m,
+        year: y,
+        previousBalance,
+        billedThisMonth,
+        paidThisMonth,
+        endingBalance,
+        creditBalance,
+        lessonsThisMonth: monthLessons,
+        payments,
+        isFamily: false
+      };
+    } else {
+      return res.status(400).json({ message: 'Either studentId or familyId is required' });
+    }
+
+    // Add company info to statement data
+    statementData.companyName = user?.companyName || null;
+    statementData.companyPhone = user?.phone || null;
+    statementData.companyEmail = user?.email || null;
+    statementData.companyAddress = user?.address || null;
+    statementData.logoUrl = user?.logoUrl || null;
+    statementData.venmo = user?.venmo || null;
+    statementData.zelle = user?.zelle || null;
+
+    // Generate PDF
+    const pdfBytes = await generateMonthlyStatementPDF(statementData);
+
+    const accountName = statementData.familyName || statementData.studentName || 'Student';
+    const sanitizedName = accountName.replace(/\s+/g, '-');
+    const filename = `monthly-statement-${sanitizedName}-${m}-${y}-${new Date().toISOString().split('T')[0]}.pdf`;
+
+    // Convert Uint8Array to Buffer if needed
+    const pdfBuffer = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.end(pdfBuffer, 'binary');
+  } catch (error) {
+    console.error('Generate monthly statement error:', error);
+    res.status(500).json({ message: 'Error generating monthly statement' });
   }
 });
 

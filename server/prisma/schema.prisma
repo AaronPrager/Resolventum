@@ -19,6 +19,8 @@ model User {
   phone       String?
   address     String?
   logoUrl     String?
+  venmo       String?
+  zelle       String?
   verified    Boolean  @default(false)
   verificationToken String?
   verificationTokenExpires DateTime?

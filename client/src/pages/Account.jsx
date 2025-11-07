@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
-import { Upload, X, Building2, Phone, Mail, MapPin, User } from 'lucide-react'
+import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign } from 'lucide-react'
 
 export function Account() {
   const { user, updateUser } = useAuth()
@@ -18,7 +18,9 @@ export function Account() {
     phone: '',
     email: '',
     address: '',
-    logoUrl: ''
+    logoUrl: '',
+    venmo: '',
+    zelle: ''
   })
   const [profileLoading, setProfileLoading] = useState(false)
   const [logoPreview, setLogoPreview] = useState(null)
@@ -61,6 +63,8 @@ export function Account() {
       formData.append('companyName', profile.companyName || '')
       formData.append('phone', profile.phone || '')
       formData.append('address', profile.address || '')
+      formData.append('venmo', profile.venmo || '')
+      formData.append('zelle', profile.zelle || '')
       
       if (logoFile) {
         formData.append('logo', logoFile)
@@ -275,6 +279,43 @@ export function Account() {
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="123 Main St, City, State ZIP"
             />
+          </div>
+
+          {/* Payment Information Section */}
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-md font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <DollarSign className="w-5 h-5" />
+              Payment Information
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">Add your payment details to share with students for payments.</p>
+            
+            {/* Venmo */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Venmo Username or Link
+              </label>
+              <input
+                type="text"
+                value={profile.venmo || ''}
+                onChange={(e) => setProfile({ ...profile, venmo: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="@yourvenmo or venmo.com/yourvenmo"
+              />
+            </div>
+
+            {/* Zelle */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Zelle Email or Phone
+              </label>
+              <input
+                type="text"
+                value={profile.zelle || ''}
+                onChange={(e) => setProfile({ ...profile, zelle: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="your@email.com or (555) 123-4567"
+              />
+            </div>
           </div>
 
           <button

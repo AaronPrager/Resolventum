@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { api } from '../utils/api'
-import { DollarSign, BookOpen, AlertCircle, Users as UsersIcon, Calendar as CalendarIcon, FileText, Download, X } from 'lucide-react'
+import { DollarSign, BookOpen, AlertCircle, Users as UsersIcon, Calendar as CalendarIcon, FileText, Download, X, Mail } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Reports() {
@@ -43,6 +43,9 @@ export function Reports() {
   const [selectedOutstandingStudent, setSelectedOutstandingStudent] = useState(null) // Selected student from outstanding balances report
   const [outstandingStudentDetails, setOutstandingStudentDetails] = useState(null) // Detailed data for selected student
   const [loadingOutstandingDetails, setLoadingOutstandingDetails] = useState(false)
+  const [selectedMonthlyRow, setSelectedMonthlyRow] = useState(null) // Selected row from monthly all report
+  const [monthlyStatementData, setMonthlyStatementData] = useState(null) // Monthly statement data for selected row
+  const [loadingMonthlyStatement, setLoadingMonthlyStatement] = useState(false)
 
   // Student monthly report state
   const [students, setStudents] = useState([])
@@ -105,6 +108,44 @@ export function Reports() {
       setFamilies(data)
     } catch (err) {
       // ignore
+    }
+  }
+
+  const handleMonthlyRowClick = async (row) => {
+    try {
+      setLoadingMonthlyStatement(true)
+      setSelectedMonthlyRow(row)
+      
+      // Determine month and year from the current report
+      const month = monthlyAllDateRangeMode === 'month' 
+        ? parseInt(monthlyAllMonth) 
+        : monthlyAllReport?.month || new Date().getMonth() + 1
+      const year = monthlyAllDateRangeMode === 'month'
+        ? parseInt(monthlyAllYear)
+        : monthlyAllReport?.year || new Date().getFullYear()
+      
+      if (row.familyId) {
+        // Fetch family monthly statement
+        const { data } = await api.get('/reports/monthly-family', {
+          params: { month, year, familyId: row.familyId }
+        })
+        setMonthlyStatementData(data)
+      } else if (row.studentId) {
+        // Fetch individual student monthly statement
+        const { data } = await api.get('/reports/monthly-student', {
+          params: { month, year, studentId: row.studentId }
+        })
+        setMonthlyStatementData(data)
+      } else {
+        toast.error('Cannot load monthly statement')
+        setSelectedMonthlyRow(null)
+      }
+    } catch (error) {
+      console.error('Failed to load monthly statement:', error)
+      toast.error('Failed to load monthly statement')
+      setSelectedMonthlyRow(null)
+    } finally {
+      setLoadingMonthlyStatement(false)
     }
   }
 
@@ -184,7 +225,8 @@ export function Reports() {
           student: {
             firstName: row.studentName,
             lastName: '',
-            familyId: row.familyId
+            familyId: row.familyId,
+            email: familyStudents[0]?.email || familyStudents[0]?.parentEmail || null
           },
           completedLessons: allCompletedLessons.map(lesson => ({
             id: lesson.id,
@@ -1171,8 +1213,8 @@ export function Reports() {
                       <div>
                         <p className="text-xs text-gray-500">Ending Balance</p>
                         <p className={`text-lg font-semibold ${
-                          monthlyAllReport.totals.endingBalance > 0 ? 'text-blue-600' : 
-                          monthlyAllReport.totals.endingBalance < 0 ? 'text-red-600' : 
+                          monthlyAllReport.totals.endingBalance > 0 ? 'text-red-600' : 
+                          monthlyAllReport.totals.endingBalance < 0 ? 'text-blue-600' : 
                           'text-gray-900'
                         }`}>
                           {formatCurrency(monthlyAllReport.totals.endingBalance)}
@@ -1221,7 +1263,11 @@ export function Reports() {
                           </tr>
                         ) : (
                           monthlyAllReport.students.map((row) => (
-                            <tr key={row.familyId || row.studentId} className="hover:bg-gray-50">
+                            <tr 
+                              key={row.familyId || row.studentId} 
+                              onClick={() => handleMonthlyRowClick(row)}
+                              className="cursor-pointer hover:bg-gray-50 transition-colors"
+                            >
                               <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
                                 {row.familyName || row.studentName}
                               </td>
@@ -1240,8 +1286,8 @@ export function Reports() {
                                 {formatCurrency(row.paidThisMonth)}
                               </td>
                               <td className={`px-4 py-3 whitespace-nowrap text-sm text-right font-semibold ${
-                                row.endingBalance > 0 ? 'text-blue-600' : 
-                                row.endingBalance < 0 ? 'text-red-600' : 
+                                row.endingBalance > 0 ? 'text-red-600' : 
+                                row.endingBalance < 0 ? 'text-blue-600' : 
                                 'text-gray-900'
                               }`}>
                                 {formatCurrency(row.endingBalance)}
@@ -1274,8 +1320,8 @@ export function Reports() {
                             <span>Billed: {formatCurrency(row.billedThisMonth)}</span>
                             <span>Paid: {formatCurrency(row.paidThisMonth)}</span>
                             <span className={`font-semibold ${
-                              row.endingBalance > 0 ? 'text-blue-600' : 
-                              row.endingBalance < 0 ? 'text-red-600' : 
+                              row.endingBalance > 0 ? 'text-red-600' : 
+                              row.endingBalance < 0 ? 'text-blue-600' : 
                               'text-gray-900'
                             }`}>
                               Ending Balance: {formatCurrency(row.endingBalance)}
@@ -1314,7 +1360,6 @@ export function Reports() {
                                           {lesson.student ? `${lesson.student.firstName} ${lesson.student.lastName}` : '-'}
                                         </td>
                                       )}
-                                      <td className="px-2 py-1">{lesson.subject || '-'}</td>
                                       <td className="px-2 py-1 text-right">{lesson.duration || '-'}</td>
                                       <td className="px-2 py-1 text-right">{formatCurrency(lesson.price ?? 0)}</td>
                                       <td className="px-2 py-1 text-center">
@@ -1595,7 +1640,6 @@ export function Reports() {
                                           <thead className="bg-white">
                                             <tr>
                                               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Subject</th>
                                               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
                                               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
                                               <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -1608,7 +1652,6 @@ export function Reports() {
                                                 <td className="px-4 py-2 text-sm text-gray-900">
                                                   {new Date(lesson.date).toLocaleDateString()}
                                                 </td>
-                                                <td className="px-4 py-2 text-sm text-gray-900">{lesson.subject}</td>
                                                 <td className="px-4 py-2 text-sm text-gray-900">
                                                   {lesson.hours.toFixed(2)}h ({lesson.duration} min)
                                                 </td>
@@ -1913,9 +1956,11 @@ export function Reports() {
                           if (lesson.payments.length === 0) {
                             // Check if this is a complimentary lesson (price = 0, marked as paid)
                             const isComplimentary = lesson.price === 0 && (lesson.paidAmount || 0) >= (lesson.price || 0)
+                            // Check if there's outstanding balance
+                            const hasOutstandingBalance = (lesson.price || 0) > (lesson.paidAmount || 0) && !isComplimentary
                             
                             return (
-                              <tr key={`lesson-${lesson.id}-no-payment`}>
+                              <tr key={`lesson-${lesson.id}-no-payment`} className={hasOutstandingBalance ? 'bg-red-50' : ''}>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{lesson.name}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{lesson.date}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${lesson.price.toFixed(2)}</td>
@@ -2034,7 +2079,7 @@ export function Reports() {
                                           </div>
                   </div>
                 )}
-              </div>
+                                </div>
                               )}
                             </td>
                           </tr>
@@ -2050,9 +2095,11 @@ export function Reports() {
                             : null
                           const paymentMethods = [...new Set(lesson.payments.map(p => p.method || 'Unknown').filter(m => m))].join(', ')
                           const isFirstPaymentRow = true // Only one row now, so always first
+                          // Check if there's outstanding balance
+                          const hasOutstandingBalance = (lesson.price || 0) > totalPaid
                           
                           return (
-                            <tr key={`lesson-${lesson.id}`}>
+                            <tr key={`lesson-${lesson.id}`} className={hasOutstandingBalance ? 'bg-red-50' : ''}>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{lesson.name}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{lesson.date}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${lesson.price.toFixed(2)}</td>
@@ -2220,14 +2267,14 @@ export function Reports() {
                                       </tr>
                                     )
                                   })
-                              )}
-                            </tbody>
-                          </table>
+                      )}
+                    </tbody>
+                  </table>
                         </div>
                 ) : (
                   <div className="p-8 text-center text-gray-500 text-sm">
                     Select a month and year, then click "Load Report"
-                      </div>
+                  </div>
                 )}
             </>
           )}
@@ -2280,7 +2327,7 @@ export function Reports() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Payment Method
                 </label>
-                <select
+                  <select
                   value={newPaymentForm.method}
                   onChange={(e) => setNewPaymentForm({ ...newPaymentForm, method: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
@@ -2290,7 +2337,7 @@ export function Reports() {
                   <option value="cash">Cash</option>
                   <option value="check">Check</option>
                   <option value="other">Other</option>
-                </select>
+                  </select>
                     </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -2302,8 +2349,8 @@ export function Reports() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                   rows="2"
                   placeholder="Additional notes..."
-                />
-                  </div>
+                  />
+                </div>
               </div>
             <div className="flex justify-end gap-2 mt-6">
               <button
@@ -2355,29 +2402,29 @@ export function Reports() {
               onClick={(e) => e.stopPropagation()}
             >
             <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
+                    <div>
                 <h2 className="text-xl font-semibold text-gray-900">
                   Balance Details - {outstandingStudentDetails.isFamily 
                     ? outstandingStudentDetails.student.firstName 
                     : `${outstandingStudentDetails.student.firstName} ${outstandingStudentDetails.student.lastName || ''}`.trim()}
-                </h2>
+                      </h2>
                 {outstandingStudentDetails.isFamily && outstandingStudentDetails.familyStudents && (
                   <p className="text-sm text-gray-500 mt-1">
                     {outstandingStudentDetails.familyStudents.map(s => `${s.firstName} ${s.lastName}`).join(', ')}
                   </p>
                 )}
                 <p className="text-sm text-gray-500 mt-1">Click outside to close</p>
-              </div>
-              <div className="flex items-center gap-3">
-                <button
+                    </div>
+              <div className="flex items-center gap-2">
+                    <button
                   onClick={async () => {
+                    const studentId = selectedOutstandingStudent?.studentId
+                    if (!studentId) {
+                      toast.error('Cannot generate PDF')
+                      return
+                    }
+                    
                     try {
-                      const studentId = selectedOutstandingStudent?.studentId
-                      if (!studentId) {
-                        toast.error('Cannot generate PDF')
-                        return
-                      }
-                      
                       toast.loading('Generating PDF...', { id: 'pdf-generation' })
                       const response = await api.post(
                         `/reports/balance-statement/${studentId}`,
@@ -2390,7 +2437,9 @@ export function Reports() {
                       const url = window.URL.createObjectURL(blob)
                       const link = document.createElement('a')
                       link.href = url
-                      link.download = `balance-statement-${selectedOutstandingStudent.studentName.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`
+                      
+                      const studentName = selectedOutstandingStudent?.studentName || 'student'
+                      link.download = `balance-statement-${studentName.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`
                       document.body.appendChild(link)
                       link.click()
                       document.body.removeChild(link)
@@ -2402,10 +2451,82 @@ export function Reports() {
                       toast.error('Failed to generate PDF', { id: 'pdf-generation' })
                     }
                   }}
-                  className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                  className="inline-flex items-center justify-center p-2 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                  title="Download PDF"
                 >
-                  <Download className="h-4 w-4 mr-2" />
-                  Download PDF
+                  <Download className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={async () => {
+                    const studentId = selectedOutstandingStudent?.studentId
+                    if (!studentId) {
+                      toast.error('Cannot send email')
+                      return
+                    }
+                    
+                    // Get student email (parent email preferred, fallback to student email)
+                    let recipientEmail = null
+                    if (outstandingStudentDetails?.student?.parentEmail) {
+                      recipientEmail = outstandingStudentDetails.student.parentEmail
+                    } else if (outstandingStudentDetails?.student?.email) {
+                      recipientEmail = outstandingStudentDetails.student.email
+                    } else {
+                      // Fetch student data to get email
+                      try {
+                        const { data: studentData } = await api.get(`/students/${studentId}`)
+                        recipientEmail = studentData.parentEmail || studentData.email || null
+                      } catch (err) {
+                        console.error('Failed to fetch student email:', err)
+                      }
+                    }
+                    
+                    if (!recipientEmail) {
+                      toast.error('No email address found for this student')
+                      return
+                    }
+                    
+                    try {
+                      toast.loading('Generating PDF...', { id: 'email-pdf-generation' })
+                      const response = await api.post(
+                        `/reports/balance-statement/${studentId}`,
+                        {},
+                        { responseType: 'blob' }
+                      )
+                      
+                      // Create a blob URL and download the PDF
+                      const blob = new Blob([response.data], { type: 'application/pdf' })
+                      const url = window.URL.createObjectURL(blob)
+                      const link = document.createElement('a')
+                      link.href = url
+                      
+                      const studentName = selectedOutstandingStudent?.studentName || 'student'
+                      const filename = `balance-statement-${studentName.replace(/\s+/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`
+                      link.download = filename
+                      document.body.appendChild(link)
+                      link.click()
+                      document.body.removeChild(link)
+                      
+                      // Wait a moment for download to start, then open email client
+                      setTimeout(() => {
+                        window.URL.revokeObjectURL(url)
+                        
+                        // Create mailto link with prefilled email and subject
+                        const subject = encodeURIComponent(`Balance Statement - ${studentName}`)
+                        const body = encodeURIComponent(`Please find the balance statement attached.\n\nPlease attach the downloaded PDF file: ${filename}`)
+                        const mailtoLink = `mailto:${recipientEmail}?subject=${subject}&body=${body}`
+                        
+                        window.location.href = mailtoLink
+                        toast.success('Email client opened. Please attach the downloaded PDF.', { id: 'email-pdf-generation' })
+                      }, 500)
+                    } catch (error) {
+                      console.error('Failed to generate PDF for email:', error)
+                      toast.error('Failed to generate PDF', { id: 'email-pdf-generation' })
+                    }
+                  }}
+                  className="inline-flex items-center justify-center p-2 text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors"
+                  title="Send Email"
+                >
+                  <Mail className="h-4 w-4" />
                 </button>
                 <button
                   onClick={() => {
@@ -2415,8 +2536,8 @@ export function Reports() {
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <X className="h-6 w-6" />
-                </button>
-              </div>
+                    </button>
+                  </div>
             </div>
             
             <div className="overflow-y-auto flex-1 p-6">
@@ -2431,7 +2552,7 @@ export function Reports() {
                         outstandingStudentDetails.completedLessons.reduce((sum, lesson) => sum + (lesson.price || 0), 0)
                       )}
                     </p>
-                  </div>
+                      </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Total Paid</p>
                     <p className="text-lg font-semibold text-green-700">
@@ -2442,7 +2563,7 @@ export function Reports() {
                         }, 0)
                       )}
                     </p>
-                  </div>
+                      </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Outstanding Balance</p>
                     <p className={`text-lg font-semibold ${
@@ -2467,15 +2588,15 @@ export function Reports() {
                         })()
                       )}
                     </p>
-                  </div>
+                      </div>
                   <div>
                     <p className="text-xs text-gray-500 mb-1">Lessons Completed</p>
                     <p className="text-lg font-semibold text-gray-900">
                       {outstandingStudentDetails.completedLessons.length}
                     </p>
-                  </div>
-                </div>
-              </div>
+                      </div>
+                      </div>
+                    </div>
 
               {/* All Lessons */}
               <div className="mb-6">
@@ -2488,25 +2609,24 @@ export function Reports() {
                   )}
                 </h3>
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                         {outstandingStudentDetails.isFamily && (
                           <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Student</th>
                         )}
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Subject</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Duration</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Paid</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Balance</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Payments</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
                       {outstandingStudentDetails.completedLessons.length === 0 ? (
                         <tr>
-                          <td colSpan={outstandingStudentDetails.isFamily ? 8 : 7} className="px-4 py-6 text-center text-sm text-gray-500">No completed lessons</td>
+                          <td colSpan={outstandingStudentDetails.isFamily ? 7 : 6} className="px-4 py-6 text-center text-sm text-gray-500">No completed lessons</td>
                         </tr>
                       ) : (
                         outstandingStudentDetails.completedLessons
@@ -2514,7 +2634,7 @@ export function Reports() {
                           .map((lesson) => {
                             const lessonPaid = lesson.payments.reduce((sum, payment) => sum + (payment.amount || 0), 0)
                             const lessonBalance = (lesson.price || 0) - lessonPaid
-                            return (
+                                    return (
                               <tr key={lesson.id}>
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                                   {new Date(lesson.date).toLocaleDateString('en-US', { 
@@ -2528,7 +2648,6 @@ export function Reports() {
                                 {outstandingStudentDetails.isFamily && (
                                   <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-600">{lesson.studentName || '-'}</td>
                                 )}
-                                <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{lesson.subject || '-'}</td>
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{lesson.duration || '-'} min</td>
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{formatCurrency(lesson.price || 0)}</td>
                                 <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-green-700">{formatCurrency(lessonPaid)}</td>
@@ -2548,29 +2667,29 @@ export function Reports() {
                                     </div>
                                   )}
                                 </td>
-                              </tr>
-                            )
-                          })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                                      </tr>
+                                    )
+                                  })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
 
               {/* All Payments */}
-              <div>
+                      <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">All Payments</h3>
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
                       {outstandingStudentDetails.allPayments.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-500">No payments recorded</td>
@@ -2590,15 +2709,255 @@ export function Reports() {
                               <td className="px-4 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">{formatCurrency(payment.amount)}</td>
                               <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{payment.method || '-'}</td>
                               <td className="px-4 py-3 text-sm text-gray-600">{payment.notes || '-'}</td>
-                            </tr>
-                          ))
-                      )}
-                    </tbody>
-                  </table>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+          ) : null}
+                  </div>
+                )}
+
+      {/* Monthly Statement Modal */}
+      {selectedMonthlyRow && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          onClick={() => {
+            setSelectedMonthlyRow(null)
+            setMonthlyStatementData(null)
+          }}
+        >
+          {loadingMonthlyStatement ? (
+            <div className="bg-white rounded-lg shadow-xl p-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+              <p className="mt-4 text-gray-600">Loading monthly statement...</p>
+              </div>
+          ) : monthlyStatementData ? (
+            <div 
+              className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-900">
+                    Monthly Statement - {monthlyStatementData.studentName || monthlyStatementData.familyName || 'Student'}
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {monthlyStatementData.month && monthlyStatementData.year 
+                      ? `${new Date(monthlyStatementData.year, monthlyStatementData.month - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`
+                      : 'Monthly Statement'}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">Click outside to close</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={async () => {
+                      const studentId = selectedMonthlyRow?.studentId
+                      const familyId = selectedMonthlyRow?.familyId
+                      const month = monthlyStatementData?.month || monthlyAllDateRangeMode === 'month' 
+                        ? parseInt(monthlyAllMonth) 
+                        : monthlyAllReport?.month || new Date().getMonth() + 1
+                      const year = monthlyStatementData?.year || monthlyAllDateRangeMode === 'month'
+                        ? parseInt(monthlyAllYear)
+                        : monthlyAllReport?.year || new Date().getFullYear()
+                      
+                      if (!studentId && !familyId) {
+                        toast.error('Cannot generate PDF')
+                        return
+                      }
+                      
+                      try {
+                        toast.loading('Generating PDF...', { id: 'pdf-generation' })
+                        const params = { month, year }
+                        if (familyId) {
+                          params.familyId = familyId
+                        } else {
+                          params.studentId = studentId
+                        }
+                        
+                        const response = await api.post(
+                          '/reports/monthly-statement',
+                          {},
+                          { 
+                            params,
+                            responseType: 'blob' 
+                          }
+                        )
+                        
+                        // Create a blob URL and trigger download
+                        const blob = new Blob([response.data], { type: 'application/pdf' })
+                        const url = window.URL.createObjectURL(blob)
+                        const link = document.createElement('a')
+                        link.href = url
+                        
+                        const accountName = monthlyStatementData?.familyName || monthlyStatementData?.studentName || 'student'
+                        link.download = `monthly-statement-${accountName.replace(/\s+/g, '-')}-${month}-${year}-${new Date().toISOString().split('T')[0]}.pdf`
+                        document.body.appendChild(link)
+                        link.click()
+                        document.body.removeChild(link)
+                        window.URL.revokeObjectURL(url)
+                        
+                        toast.success('PDF downloaded successfully', { id: 'pdf-generation' })
+                      } catch (error) {
+                        console.error('Failed to generate PDF:', error)
+                        toast.error('Failed to generate PDF', { id: 'pdf-generation' })
+                      }
+                    }}
+                    className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 transition-colors"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Download PDF
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedMonthlyRow(null)
+                      setMonthlyStatementData(null)
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-6 w-6" />
+                  </button>
                 </div>
               </div>
+              
+              <div className="overflow-y-auto flex-1 p-6">
+                {/* Summary */}
+                <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Balance Summary</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Previous Balance</p>
+                      <p className="text-lg font-semibold text-gray-900">
+                        {formatCurrency(monthlyStatementData.previousBalance || 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Billed This Month</p>
+                      <p className="text-lg font-semibold text-gray-900">
+                        {formatCurrency(monthlyStatementData.billedThisMonth || 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Paid This Month</p>
+                      <p className="text-lg font-semibold text-green-700">
+                        {formatCurrency(monthlyStatementData.paidThisMonth || 0)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 mb-1">Ending Balance</p>
+                      <p className={`text-lg font-semibold ${
+                        (monthlyStatementData.endingBalance || 0) > 0 ? 'text-red-600' : 
+                        (monthlyStatementData.endingBalance || 0) < 0 ? 'text-blue-600' : 
+                        'text-gray-900'
+                      }`}>
+                        {formatCurrency(monthlyStatementData.endingBalance || 0)}
+                      </p>
+                    </div>
+                  </div>
+                  {monthlyStatementData.creditBalance !== undefined && monthlyStatementData.creditBalance > 0 && (
+                    <div className="mt-4">
+                      <p className="text-xs text-gray-500 mb-1">Credit Available</p>
+                      <p className="text-lg font-semibold text-blue-600">
+                        {formatCurrency(monthlyStatementData.creditBalance)}
+                      </p>
+                    </div>
+          )}
+        </div>
+
+                {/* Lessons */}
+                {monthlyStatementData.lessonsThisMonth && monthlyStatementData.lessonsThisMonth.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                      Lessons This Month ({monthlyStatementData.lessonsThisMonth.length})
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Duration</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Price</th>
+                            <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {monthlyStatementData.lessonsThisMonth.map((lesson) => (
+                            <tr key={lesson.id}>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {new Date(lesson.dateTime).toLocaleDateString('en-US', { 
+                                  year: 'numeric', 
+                                  month: 'short', 
+                                  day: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit'
+                                })}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{lesson.duration || '-'} min</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right text-gray-900">{formatCurrency(lesson.price || 0)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-center">
+                                <span className={`px-2 py-0.5 rounded text-xs ${
+                                  new Date(lesson.dateTime) < new Date() ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                                }`}>
+                                  {new Date(lesson.dateTime) < new Date() ? 'Billed' : 'Future'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+      </div>
+                  </div>
+                )}
+
+                {/* Payments */}
+                {monthlyStatementData.payments && monthlyStatementData.payments.length > 0 && (
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                      Payments This Month ({monthlyStatementData.payments.length})
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Method</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {monthlyStatementData.payments.map((payment) => (
+                            <tr key={payment.id}>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+                                {new Date(payment.date).toLocaleDateString('en-US', { 
+                                  year: 'numeric', 
+                                  month: 'short', 
+                                  day: 'numeric'
+                                })}
+                              </td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-right font-semibold text-gray-900">{formatCurrency(payment.amount)}</td>
+                              <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{payment.method || '-'}</td>
+                              <td className="px-4 py-3 text-sm text-gray-600">{payment.notes || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {(!monthlyStatementData.lessonsThisMonth || monthlyStatementData.lessonsThisMonth.length === 0) && 
+                 (!monthlyStatementData.payments || monthlyStatementData.payments.length === 0) && (
+                  <div className="text-center py-8 text-gray-500">
+                    <p>No lessons or payments for this period.</p>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           ) : null}
         </div>
       )}

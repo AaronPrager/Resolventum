@@ -23,6 +23,8 @@ export async function generateBalanceStatementPDF(statementData) {
     companyEmail, 
     companyAddress,
     logoUrl,
+    venmo,
+    zelle,
     isFamily,
     familyStudents
   } = statementData;
@@ -279,6 +281,77 @@ export async function generateBalanceStatementPDF(statementData) {
 
   y = summaryBoxY - summaryBoxHeight - 30;
 
+  // Payment Information Section (if available)
+  if (venmo || zelle) {
+    // Check if we need a new page
+    if (y < 150) {
+      page = pdfDoc.addPage([595, 842]);
+      y = 800;
+    }
+
+    page.drawText('PAYMENT METHODS', {
+      x: margin,
+      y,
+      size: 14,
+      font: fontBold,
+      color: rgb(0.2, 0.3, 0.6),
+    });
+
+    y -= 25;
+
+    // Payment box with background
+    const paymentBoxY = y;
+    const paymentBoxHeight = (venmo && zelle ? 50 : 30);
+    page.drawRectangle({
+      x: margin,
+      y: paymentBoxY - paymentBoxHeight,
+      width: contentWidth,
+      height: paymentBoxHeight,
+      color: rgb(0.95, 0.96, 1.0),
+      borderColor: rgb(0.3, 0.4, 0.7),
+      borderWidth: 2,
+    });
+
+    let paymentY = paymentBoxY - 20;
+    
+    if (venmo) {
+      page.drawText('Venmo:', {
+        x: margin + 10,
+        y: paymentY,
+        size: 11,
+        font: fontBold,
+        color: rgb(0.2, 0.3, 0.6),
+      });
+      page.drawText(venmo, {
+        x: margin + 80,
+        y: paymentY,
+        size: 12,
+        font: fontBold,
+        color: rgb(0.2, 0.4, 0.7),
+      });
+      paymentY -= 20;
+    }
+
+    if (zelle) {
+      page.drawText('Zelle:', {
+        x: margin + 10,
+        y: paymentY,
+        size: 11,
+        font: fontBold,
+        color: rgb(0.2, 0.3, 0.6),
+      });
+      page.drawText(zelle, {
+        x: margin + 80,
+        y: paymentY,
+        size: 12,
+        font: fontBold,
+        color: rgb(0.2, 0.4, 0.7),
+      });
+    }
+
+    y = paymentBoxY - paymentBoxHeight - 30;
+  }
+
   // Lessons section
   if (completedLessons.length > 0) {
     page.drawText('COMPLETED LESSONS', {
@@ -294,13 +367,12 @@ export async function generateBalanceStatementPDF(statementData) {
     const tableStartY = y;
     const rowHeight = 15;
     const colWidths = {
-      date: 100,
-      student: isFamily ? 100 : 0,
-      subject: 100,
-      duration: 60,
-      price: 70,
-      paid: 70,
-      balance: 70,
+      date: 120,
+      student: isFamily ? 120 : 0,
+      duration: 70,
+      price: 80,
+      paid: 80,
+      balance: 80,
     };
 
     // Draw table header background
@@ -330,14 +402,6 @@ export async function generateBalanceStatementPDF(statementData) {
       });
       headerX += colWidths.student;
     }
-
-    page.drawText('Subject', {
-      x: headerX,
-      y: tableStartY - 12,
-      size: 9,
-      font: fontBold,
-    });
-    headerX += colWidths.subject;
 
     const durationX = margin + contentWidth - colWidths.balance - colWidths.paid - colWidths.price - colWidths.duration;
     page.drawText('Duration', {
@@ -424,15 +488,6 @@ export async function generateBalanceStatementPDF(statementData) {
         });
         cellX += colWidths.student;
       }
-
-      // Subject
-      page.drawText(lesson.subject || '-', {
-        x: cellX,
-        y: cellY,
-        size: 8,
-        font: font,
-      });
-      cellX += colWidths.subject;
 
       // Duration
       const durationText = lesson.duration ? `${lesson.duration} min` : '-';
