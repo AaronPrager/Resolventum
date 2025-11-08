@@ -3,6 +3,7 @@ import { body, validationResult } from 'express-validator';
 import { authenticateToken } from '../middleware/auth.js';
 import prisma from '../prisma/client.js';
 import { v4 as uuidv4 } from 'uuid';
+// Email functions to students/parents are disabled - only teacher schedule emails are allowed
 
 const router = express.Router();
 
@@ -1914,6 +1915,52 @@ router.get('/upcoming/tomorrow', async (req, res) => {
   } catch (error) {
     console.error('Get upcoming lessons error:', error);
     res.status(500).json({ message: 'Error fetching upcoming lessons' });
+  }
+});
+
+// Manual trigger for daily schedule report - DISABLED (emails to students/parents are disabled)
+router.post('/sms/send-daily-schedule', authenticateToken, async (req, res) => {
+  res.status(403).json({ message: 'Emails to students/parents are disabled. Only teacher schedule emails are allowed.' });
+});
+
+// Manual trigger for reminders - DISABLED (emails to students/parents are disabled)
+router.post('/sms/send-reminders', authenticateToken, async (req, res) => {
+  res.status(403).json({ message: 'Emails to students/parents are disabled. Only teacher schedule emails are allowed.' });
+});
+
+// Send today's full schedule via email to teacher (manual)
+router.post('/sms/send-teacher-schedule', authenticateToken, async (req, res) => {
+  try {
+    // Get teacher's email from profile
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        email: true,
+        name: true,
+        companyName: true
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({ message: 'Email address not set in profile. Please add your email in Account settings.' });
+    }
+
+    const { sendTeacherDailyScheduleEmail } = await import('../jobs/reminderScheduler.js');
+    const result = await sendTeacherDailyScheduleEmail(req.user.id, user.email);
+    
+    res.json({ 
+      message: 'Schedule sent successfully',
+      lessonCount: result.lessonCount
+    });
+  } catch (error) {
+    console.error('Error sending teacher schedule email:', error);
+    res.status(500).json({ 
+      message: error.message || 'Error sending teacher schedule email' 
+    });
   }
 });
 

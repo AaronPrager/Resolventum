@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { Calendar as BigCalendar, momentLocalizer } from 'react-big-calendar'
 import moment from 'moment'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
-import { Clock, User, MapPin, Calendar as CalendarIcon, Video, X, Plus, Trash2 } from 'lucide-react'
+import { Clock, User, MapPin, Calendar as CalendarIcon, Video, X, Plus, Trash2, MessageSquare } from 'lucide-react'
 import { api } from '../utils/api'
 import toast from 'react-hot-toast'
 
@@ -237,6 +237,17 @@ export function Calendar() {
       setStudents(sorted)
     } catch (error) {
       toast.error('Failed to load students')
+    }
+  }
+
+  const handleSendTeacherSchedule = async () => {
+    try {
+      toast.loading('Sending schedule...', { id: 'send-schedule' })
+      const { data } = await api.post('/lessons/sms/send-teacher-schedule')
+      toast.success(`Schedule sent! ${data.lessonCount} lesson${data.lessonCount !== 1 ? 's' : ''} included.`, { id: 'send-schedule' })
+    } catch (error) {
+      console.error('Error sending teacher schedule:', error)
+      toast.error(error.response?.data?.message || 'Failed to send schedule', { id: 'send-schedule' })
     }
   }
 
@@ -991,13 +1002,22 @@ export function Calendar() {
                 {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
               </p>
             </div>
-            <button
-              onClick={handleScheduleLesson}
-              className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-              title="Schedule new lesson"
-            >
-              <Plus className="h-5 w-5" />
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleSendTeacherSchedule}
+                className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                title="Send today's schedule via email"
+              >
+                <MessageSquare className="h-5 w-5" />
+              </button>
+              <button
+                onClick={handleScheduleLesson}
+                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                title="Schedule new lesson"
+              >
+                <Plus className="h-5 w-5" />
+              </button>
+            </div>
           </div>
           <div className="overflow-y-auto max-h-[640px]">
             {currentViewLessons.length === 0 ? (

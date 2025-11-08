@@ -8,6 +8,7 @@
       "source": "/api/(.*)",
       "destination": "/api"
     }
-  ]
+  ],
+  "crons": []
 }
 
