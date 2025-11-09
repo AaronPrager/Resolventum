@@ -24,6 +24,10 @@ model User {
   verified    Boolean  @default(false)
   verificationToken String?
   verificationTokenExpires DateTime?
+  // Automatic email settings
+  autoEmailEnabled Boolean @default(false)
+  autoEmailTime    String?  // Time in HH:MM format (24-hour)
+  autoEmailAddress String?  // Email address to send schedule to
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   students  Student[]

@@ -9,6 +9,11 @@
       "destination": "/api"
     }
   ],
-  "crons": []
+  "crons": [
+    {
+      "path": "/api/cron/check-auto-emails",
+      "schedule": "0 * * * *"
+    }
+  ]
 }
 

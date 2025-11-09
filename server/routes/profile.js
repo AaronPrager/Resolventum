@@ -54,7 +54,10 @@ router.get('/', authenticateToken, async (req, res) => {
         address: true,
         logoUrl: true,
         venmo: true,
-        zelle: true
+        zelle: true,
+        autoEmailEnabled: true,
+        autoEmailTime: true,
+        autoEmailAddress: true
       }
     });
 
@@ -76,7 +79,7 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
     console.log('File received:', req.file ? `Yes (${req.file.size} bytes, ${req.file.mimetype})` : 'No');
     console.log('Body fields:', { name: req.body.name, email: req.body.email, companyName: req.body.companyName, phone: req.body.phone, address: req.body.address, venmo: req.body.venmo, zelle: req.body.zelle });
     
-    const { name, email, companyName, phone, address, venmo, zelle } = req.body;
+    const { name, email, companyName, phone, address, venmo, zelle, autoEmailEnabled, autoEmailTime, autoEmailAddress } = req.body;
     const updateData = {};
 
     if (name !== undefined) updateData.name = name;
@@ -103,6 +106,20 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
     if (address !== undefined) updateData.address = address || null;
     if (venmo !== undefined) updateData.venmo = venmo || null;
     if (zelle !== undefined) updateData.zelle = zelle || null;
+    if (autoEmailEnabled !== undefined) updateData.autoEmailEnabled = autoEmailEnabled === 'true' || autoEmailEnabled === true;
+    if (autoEmailTime !== undefined) updateData.autoEmailTime = autoEmailTime || null;
+    if (autoEmailAddress !== undefined) {
+      // Validate email format if provided
+      if (autoEmailAddress && autoEmailAddress.trim()) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(autoEmailAddress)) {
+          return res.status(400).json({ message: 'Invalid auto-email address format' });
+        }
+        updateData.autoEmailAddress = autoEmailAddress.trim();
+      } else {
+        updateData.autoEmailAddress = null;
+      }
+    }
 
     // Handle logo upload
     if (req.file) {
@@ -182,7 +199,10 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
         address: true,
         logoUrl: true,
         venmo: true,
-        zelle: true
+        zelle: true,
+        autoEmailEnabled: true,
+        autoEmailTime: true,
+        autoEmailAddress: true
       }
     });
 

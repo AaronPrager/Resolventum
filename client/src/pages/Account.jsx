@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
-import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign } from 'lucide-react'
+import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign, Clock, Send } from 'lucide-react'
 
 export function Account() {
   const { user, updateUser } = useAuth()
@@ -20,7 +20,10 @@ export function Account() {
     address: '',
     logoUrl: '',
     venmo: '',
-    zelle: ''
+    zelle: '',
+    autoEmailEnabled: false,
+    autoEmailTime: '08:00',
+    autoEmailAddress: ''
   })
   const [profileLoading, setProfileLoading] = useState(false)
   const [logoPreview, setLogoPreview] = useState(null)
@@ -61,6 +64,9 @@ export function Account() {
       formData.append('address', profile.address || '')
       formData.append('venmo', profile.venmo || '')
       formData.append('zelle', profile.zelle || '')
+      formData.append('autoEmailEnabled', profile.autoEmailEnabled)
+      formData.append('autoEmailTime', profile.autoEmailTime || '')
+      formData.append('autoEmailAddress', profile.autoEmailAddress || '')
       
       if (logoFile) {
         formData.append('logo', logoFile)
@@ -311,6 +317,68 @@ export function Account() {
                 placeholder="your@email.com or (555) 123-4567"
               />
             </div>
+          </div>
+
+          {/* Automatic Email Settings Section */}
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-md font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Send className="w-5 h-5" />
+              Automatic Email Schedule
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">Configure automatic daily schedule emails to be sent to your email address.</p>
+            
+            {/* Enable/Disable Toggle */}
+            <div className="mb-4">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={profile.autoEmailEnabled || false}
+                  onChange={(e) => setProfile({ ...profile, autoEmailEnabled: e.target.checked })}
+                  className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                />
+                <span className="text-sm font-medium text-gray-700">
+                  Enable automatic daily schedule emails
+                </span>
+              </label>
+            </div>
+
+            {/* Time and Email fields - only show if enabled */}
+            {profile.autoEmailEnabled && (
+              <>
+                {/* Time */}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    Send Time (24-hour format)
+                  </label>
+                  <input
+                    type="time"
+                    value={profile.autoEmailTime || '08:00'}
+                    onChange={(e) => setProfile({ ...profile, autoEmailTime: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    required={profile.autoEmailEnabled}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Time in 24-hour format (e.g., 08:00 for 8 AM)</p>
+                </div>
+
+                {/* Email Address */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                    <Mail className="w-4 h-4" />
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={profile.autoEmailAddress || ''}
+                    onChange={(e) => setProfile({ ...profile, autoEmailAddress: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="schedule@example.com"
+                    required={profile.autoEmailEnabled}
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Email address where daily schedule will be sent</p>
+                </div>
+              </>
+            )}
           </div>
 
           <button
