@@ -1,40 +1,5 @@
-import cron from 'node-cron';
 import prisma from '../prisma/client.js';
 import { sendEmail, isEmailConfigured } from '../utils/emailService.js';
-
-export function initializeScheduledJobs() {
-  // Automatic email scheduling to students/parents is disabled
-  // Only manual teacher schedule emails are allowed
-  console.log('Automatic email scheduling to students/parents is disabled');
-  return;
-
-  // Skip scheduled jobs in serverless environments (Vercel, AWS Lambda, etc.)
-  // Use Vercel Cron Jobs or external cron service instead
-  const isServerless = process.env.VERCEL === '1' || process.env.VERCEL_URL || process.env.AWS_LAMBDA_FUNCTION_NAME;
-  if (isServerless) {
-    console.log('Scheduled jobs skipped (serverless environment - use Vercel Cron Jobs)');
-    return;
-  }
-
-  if (!isEmailConfigured()) {
-    console.log('Scheduled jobs initialized (email notifications disabled)');
-    return;
-  }
-
-  // Run every day at 6 PM to send reminders for next day's lessons
-  cron.schedule('0 18 * * *', async () => {
-    console.log('Running scheduled reminder job...');
-    await sendReminders();
-  });
-
-  // Run every day at 8 AM to send today's lesson schedule
-  cron.schedule('0 8 * * *', async () => {
-    console.log('Running daily schedule report job...');
-    await sendDailyScheduleReport();
-  });
-
-  console.log('Scheduled jobs initialized');
-}
 
 async function sendReminders() {
   try {

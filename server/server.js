@@ -1,6 +1,8 @@
+// Load environment variables FIRST before any other imports
+import { isVercel } from './config.js';
+
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import helmet from 'helmet';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -8,14 +10,6 @@ import { dirname } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-// Detect if running in Vercel/serverless (auto-detect if VERCEL env var not set)
-const isVercel = process.env.VERCEL === '1' || process.env.VERCEL_URL || process.env.VERCEL_REGION;
-
-// Load environment variables (only needed locally, Vercel provides them automatically)
-if (!isVercel) {
-  dotenv.config();
-}
 
 // Log environment check (for debugging in serverless environments)
 if (isVercel) {
@@ -31,9 +25,6 @@ if (isVercel) {
 
 // Import Prisma client (handles serverless properly)
 import './prisma/client.js';
-
-// Import scheduled jobs (will skip in Vercel)
-import { initializeScheduledJobs } from './jobs/reminderScheduler.js';
 
 // Import routes
 import authRoutes from './routes/auth.js';
@@ -108,8 +99,6 @@ app.use((req, res) => {
 if (!isVercel) {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
-    // Initialize scheduled jobs (SMS reminders)
-    initializeScheduledJobs();
   });
 }
 

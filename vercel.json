@@ -8,12 +8,6 @@
       "source": "/api/(.*)",
       "destination": "/api"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/check-auto-emails",
-      "schedule": "0 * * * *"
-    }
   ]
 }
 
