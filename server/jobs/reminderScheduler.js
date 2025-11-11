@@ -250,20 +250,21 @@ export async function sendDailyScheduleReportManually() {
 }
 
 // Send teacher's daily schedule via email (for manual use)
-export async function sendTeacherDailyScheduleEmail(userId, userEmail) {
+export async function sendTeacherDailyScheduleEmail(userId, userEmail, targetDate = null) {
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Use provided date or default to today
+    const scheduleDate = targetDate ? new Date(targetDate) : new Date();
+    scheduleDate.setHours(0, 0, 0, 0);
     
-    const endOfDay = new Date(today);
+    const endOfDay = new Date(scheduleDate);
     endOfDay.setHours(23, 59, 59, 999);
 
-    // Get all lessons for today for this teacher
+    // Get all lessons for the target date for this teacher
     const lessons = await prisma.lesson.findMany({
       where: {
         userId: userId,
         dateTime: {
-          gte: today,
+          gte: scheduleDate,
           lte: endOfDay
         }
       },
@@ -287,7 +288,12 @@ export async function sendTeacherDailyScheduleEmail(userId, userEmail) {
     });
 
     if (lessons.length === 0) {
-      throw new Error('No lessons scheduled for today');
+      const dateStr = scheduleDate.toLocaleDateString('en-US', { 
+        month: 'long', 
+        day: 'numeric', 
+        year: 'numeric' 
+      });
+      throw new Error(`No lessons scheduled for ${dateStr}`);
     }
 
     // Get user info for company name
@@ -320,8 +326,16 @@ export async function sendTeacherDailyScheduleEmail(userId, userEmail) {
     }
 
     // Format the email content - simple format
-    let emailText = `Today's Schedule:\n\n`;
-    let emailHtml = `<h2>Today's Schedule:</h2>`;
+    const dateStr = scheduleDate.toLocaleDateString('en-US', { 
+      month: 'long', 
+      day: 'numeric', 
+      year: 'numeric' 
+    });
+    const isToday = scheduleDate.toDateString() === new Date().toDateString();
+    const scheduleLabel = isToday ? "Today's Schedule" : `Schedule for ${dateStr}`;
+    
+    let emailText = `${scheduleLabel}:\n\n`;
+    let emailHtml = `<h2>${scheduleLabel}:</h2>`;
     
     // Sort all lessons by time
     const allLessons = [];
@@ -397,15 +411,9 @@ export async function sendTeacherDailyScheduleEmail(userId, userEmail) {
       }
     }
     
-    emailText += `\nTotal: ${lessons.length} lesson${lessons.length !== 1 ? 's' : ''} today`;
-    emailHtml += `<p><strong>Total: ${lessons.length} lesson${lessons.length !== 1 ? 's' : ''} today</strong></p>`;
+    emailText += `\nTotal: ${lessons.length} lesson${lessons.length !== 1 ? 's' : ''} ${isToday ? 'today' : `on ${dateStr}`}`;
+    emailHtml += `<p><strong>Total: ${lessons.length} lesson${lessons.length !== 1 ? 's' : ''} ${isToday ? 'today' : `on ${dateStr}`}</strong></p>`;
 
-    // Format date as "January 15, 2025" or similar
-    const dateStr = today.toLocaleDateString('en-US', { 
-      month: 'long', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
     const subject = `${dateStr} Schedule`;
 
     if (!isEmailConfigured()) {

@@ -1950,7 +1950,9 @@ router.post('/sms/send-teacher-schedule', authenticateToken, async (req, res) =>
     }
 
     const { sendTeacherDailyScheduleEmail } = await import('../jobs/reminderScheduler.js');
-    const result = await sendTeacherDailyScheduleEmail(req.user.id, user.email);
+    // Accept optional date from request body (ISO string or date string)
+    const targetDate = req.body.date || null;
+    const result = await sendTeacherDailyScheduleEmail(req.user.id, user.email, targetDate);
     
     res.json({ 
       message: 'Schedule sent successfully',

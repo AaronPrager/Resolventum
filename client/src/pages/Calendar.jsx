@@ -108,6 +108,13 @@ export function Calendar() {
   const [useManualEntry, setUseManualEntry] = useState(false)
   const [endRepeatType, setEndRepeatType] = useState('date') // 'date', 'count', or 'schoolYear'
   const [numberOfClasses, setNumberOfClasses] = useState(10)
+  const [showEmailModal, setShowEmailModal] = useState(false)
+  const [emailDate, setEmailDate] = useState(() => {
+    // Default to tomorrow
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return tomorrow.toISOString().split('T')[0]
+  })
 
   // Helper functions
   const getCurrentDateTime = () => {
@@ -240,11 +247,24 @@ export function Calendar() {
     }
   }
 
-  const handleSendTeacherSchedule = async () => {
+  const handleSendTeacherSchedule = () => {
+    // Show modal to select date
+    setShowEmailModal(true)
+  }
+
+  const handleConfirmSendEmail = async () => {
     try {
       toast.loading('Sending schedule...', { id: 'send-schedule' })
-      const { data } = await api.post('/lessons/sms/send-teacher-schedule')
-      toast.success(`Schedule sent! ${data.lessonCount} lesson${data.lessonCount !== 1 ? 's' : ''} included.`, { id: 'send-schedule' })
+      const { data } = await api.post('/lessons/sms/send-teacher-schedule', {
+        date: emailDate
+      })
+      const dateStr = new Date(emailDate).toLocaleDateString('en-US', { 
+        month: 'long', 
+        day: 'numeric', 
+        year: 'numeric' 
+      })
+      toast.success(`Schedule for ${dateStr} sent! ${data.lessonCount} lesson${data.lessonCount !== 1 ? 's' : ''} included.`, { id: 'send-schedule' })
+      setShowEmailModal(false)
     } catch (error) {
       console.error('Error sending teacher schedule:', error)
       toast.error(error.response?.data?.message || 'Failed to send schedule', { id: 'send-schedule' })
@@ -1983,6 +2003,65 @@ export function Calendar() {
                       Delete Lesson
                     </button>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Email Date Selection Modal */}
+      {showEmailModal && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-md sm:w-full" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-white">
+                <div className="bg-indigo-600 text-white px-4 py-3 flex justify-between items-center">
+                  <h2 className="text-base font-semibold">
+                    Send Schedule Email
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => setShowEmailModal(false)}
+                    className="text-white hover:bg-indigo-700 rounded-full p-1 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                
+                <div className="p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select date for schedule
+                    </label>
+                    <input
+                      type="date"
+                      value={emailDate}
+                      onChange={(e) => setEmailDate(e.target.value)}
+                      className="w-full text-sm border-gray-300 rounded-md focus:border-indigo-500 focus:ring-indigo-500"
+                    />
+                    <p className="mt-2 text-xs text-gray-500">
+                      The schedule for the selected date will be sent to your email address.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-4 border-t border-gray-200 space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirmSendEmail}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                    Send Email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowEmailModal(false)}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>
