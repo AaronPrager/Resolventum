@@ -1,5 +1,4 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useState } from 'react'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
 import { Students } from './pages/Students'
@@ -10,6 +9,9 @@ import { Reports } from './pages/Reports'
 import { Account } from './pages/Account'
 import { Verify } from './pages/Verify'
 import { Statement } from './pages/Statement'
+import { Terms } from './pages/Terms'
+import { Privacy } from './pages/Privacy'
+import { Disclaimer } from './pages/Disclaimer'
 import { Layout } from './components/Layout'
 import { AuthProvider, useAuth } from './context/AuthContext'
 
@@ -35,6 +37,9 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/terms" element={<Terms />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/disclaimer" element={<Disclaimer />} />
       <Route path="/statement/:studentId" element={<ProtectedRoute><Statement /></ProtectedRoute>} />
       <Route path="/" element={<Layout />}>
         <Route index element={<ProtectedRoute><Calendar /></ProtectedRoute>} />

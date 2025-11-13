@@ -28,6 +28,8 @@ model User {
   autoEmailEnabled Boolean @default(false)
   autoEmailTime    String?  // Time in HH:MM format (24-hour)
   autoEmailAddress String?  // Email address to send schedule to
+  deleted          Boolean  @default(false)  // Soft delete flag
+  deletedAt        DateTime? // Timestamp when account was deleted
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   students  Student[]

@@ -1,15 +1,20 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
-import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign, Clock, Send } from 'lucide-react'
+import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign, Clock, Send, AlertTriangle, Trash2 } from 'lucide-react'
 
 export function Account() {
-  const { user, updateUser } = useAuth()
+  const { user, updateUser, logout } = useAuth()
+  const navigate = useNavigate()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   
   // Profile state
   const [profile, setProfile] = useState({
@@ -154,6 +159,25 @@ export function Account() {
       toast.error(e.response?.data?.message || 'Failed to change password')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleDeleteAccount = async () => {
+    if (deleteConfirm.toLowerCase() !== 'delete') {
+      toast.error('Please type "DELETE" to confirm account deletion')
+      return
+    }
+
+    try {
+      setDeleteLoading(true)
+      await api.delete('/profile')
+      toast.success('Your account has been deleted')
+      logout()
+      navigate('/login')
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Failed to delete account')
+    } finally {
+      setDeleteLoading(false)
     }
   }
 
@@ -430,6 +454,85 @@ export function Account() {
             {loading ? 'Saving...' : 'Save Password'}
           </button>
         </form>
+      </div>
+
+      {/* Delete Account Section */}
+      <div className="bg-white rounded-lg shadow p-6 border-2 border-red-200">
+        <div className="flex items-center gap-3 mb-4">
+          <AlertTriangle className="w-6 h-6 text-red-600" />
+          <h2 className="text-lg font-semibold text-red-900">Delete Account</h2>
+        </div>
+        
+        <div className="space-y-4">
+          <div className="bg-red-50 border border-red-200 rounded-md p-4">
+            <p className="text-sm text-red-800 font-semibold mb-2">⚠️ Warning: This action cannot be undone</p>
+            <p className="text-sm text-red-700 mb-2">
+              Deleting your account will:
+            </p>
+            <ul className="text-sm text-red-700 list-disc list-inside space-y-1 ml-2">
+              <li>Disable login access to your account</li>
+              <li>Mark your account as deleted</li>
+              <li>Prevent you from accessing your data</li>
+            </ul>
+            <p className="text-sm text-yellow-800 font-semibold mt-3 mb-2">
+              Note: Your account data (students, lessons, payments, etc.) will be preserved in the database but you will not be able to access it.
+            </p>
+            <p className="text-sm text-red-800 font-semibold">
+              This action is permanent and cannot be reversed. You will not be able to log in after deletion.
+            </p>
+          </div>
+
+          {!showDeleteConfirm ? (
+            <button
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete My Account
+            </button>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                <p className="text-sm text-yellow-800 font-semibold mb-2">
+                  Final Confirmation Required
+                </p>
+                <p className="text-sm text-yellow-700 mb-3">
+                  To confirm you want to delete your account, please type <strong>"DELETE"</strong> in the field below:
+                </p>
+                <input
+                  type="text"
+                  value={deleteConfirm}
+                  onChange={(e) => setDeleteConfirm(e.target.value)}
+                  placeholder="Type DELETE to confirm"
+                  className="w-full px-3 py-2 border border-yellow-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-500"
+                />
+              </div>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleDeleteAccount}
+                  disabled={deleteLoading || deleteConfirm.toLowerCase() !== 'delete'}
+                  className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {deleteLoading ? 'Deleting...' : 'Permanently Delete Account'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDeleteConfirm(false)
+                    setDeleteConfirm('')
+                  }}
+                  disabled={deleteLoading}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

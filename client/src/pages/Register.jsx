@@ -17,6 +17,7 @@ export function Register() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [verificationToken, setVerificationToken] = useState('')
+  const [agreedToTerms, setAgreedToTerms] = useState(false)
 
   const onChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
 
@@ -34,6 +35,10 @@ export function Register() {
     }
     if (form.password !== form.confirmPassword) {
       setError('Passwords do not match')
+      return
+    }
+    if (!agreedToTerms) {
+      setError('You must agree to the Terms of Use, Privacy Policy, and Information Collection Disclaimer to create an account')
       return
     }
 
@@ -93,7 +98,31 @@ export function Register() {
             </div>
           </div>
 
-          <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium transition-colors">
+          <div className="flex items-start">
+            <input
+              type="checkbox"
+              id="agreeToTerms"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              className="mt-1 h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+            />
+            <label htmlFor="agreeToTerms" className="ml-2 text-sm text-gray-700">
+              I agree to the{' '}
+              <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 underline">
+                Terms of Use
+              </a>
+              ,{' '}
+              <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 underline">
+                Privacy Policy
+              </a>
+              , and{' '}
+              <a href="/disclaimer" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 underline">
+                Information Collection Disclaimer
+              </a>
+            </label>
+          </div>
+
+          <button type="submit" disabled={loading || !agreedToTerms} className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             {loading ? 'Creating...' : 'Create account'}
           </button>
         </form>

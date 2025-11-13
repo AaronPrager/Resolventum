@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import prisma from '../prisma/client.js';
+import { sendEmail, isEmailConfigured } from '../utils/emailService.js';
 
 const router = express.Router();
 
@@ -15,12 +16,13 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    // Check if user exists
+    // Check if user exists (including deleted accounts)
     const existingUser = await prisma.user.findUnique({
       where: { email }
     });
 
     if (existingUser) {
+      // If user exists but is deleted, still prevent registration
       return res.status(400).json({ message: 'User already exists' });
     }
 
@@ -60,6 +62,48 @@ router.post('/register', async (req, res) => {
       { expiresIn: '30d' }
     );
 
+    // Send email notification to resolventum@gmail.com about new user registration
+    try {
+      if (isEmailConfigured()) {
+        const emailSubject = 'New User Registration - Resolventum';
+        const emailText = `A new user has registered on Resolventum:
+
+Name: ${name}
+Email: ${email}
+Company Name: ${companyName || 'Not provided'}
+Phone: ${phone || 'Not provided'}
+Registration Date: ${new Date().toLocaleString()}
+
+User ID: ${user.id}`;
+
+        const emailHtml = `
+          <h2>New User Registration</h2>
+          <p>A new user has registered on Resolventum:</p>
+          <ul>
+            <li><strong>Name:</strong> ${name}</li>
+            <li><strong>Email:</strong> ${email}</li>
+            <li><strong>Company Name:</strong> ${companyName || 'Not provided'}</li>
+            <li><strong>Phone:</strong> ${phone || 'Not provided'}</li>
+            <li><strong>Registration Date:</strong> ${new Date().toLocaleString()}</li>
+            <li><strong>User ID:</strong> ${user.id}</li>
+          </ul>
+        `;
+
+        await sendEmail({
+          to: 'resolventum@gmail.com',
+          subject: emailSubject,
+          text: emailText,
+          html: emailHtml
+        });
+        console.log('Registration notification email sent to resolventum@gmail.com');
+      } else {
+        console.log('Email service not configured - skipping registration notification');
+      }
+    } catch (emailError) {
+      // Log error but don't fail registration if email fails
+      console.error('Failed to send registration notification email:', emailError);
+    }
+
     res.status(201).json({ user, token, verification: { token: verificationToken } });
   } catch (error) {
     console.error('Register error:', error);
@@ -80,6 +124,11 @@ router.post('/login', async (req, res) => {
 
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Check if account is deleted
+    if (user.deleted) {
+      return res.status(403).json({ message: 'This account has been deleted and login is disabled' });
     }
 
     const validPassword = await bcrypt.compare(password, user.password);

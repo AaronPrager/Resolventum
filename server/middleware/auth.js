@@ -21,6 +21,11 @@ export const authenticateToken = async (req, res, next) => {
       return res.status(401).json({ message: 'User not found' });
     }
 
+    // Check if account is deleted
+    if (user.deleted) {
+      return res.status(403).json({ message: 'This account has been deleted and access is disabled' });
+    }
+
     req.user = user;
     next();
   } catch (error) {
