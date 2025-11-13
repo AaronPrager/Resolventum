@@ -973,7 +973,7 @@ export function Calendar() {
         <div className="space-y-6 w-full">
           {/* Calendar - Full width, break out of container for week view */}
           <div 
-            className={`bg-white rounded-lg shadow p-6 w-full ${
+            className={`bg-white rounded-lg shadow w-full ${
               currentView === 'week' ? 'relative left-1/2 right-1/2 -translate-x-1/2' : ''
             }`}
             style={currentView === 'week' ? {
@@ -983,7 +983,27 @@ export function Calendar() {
               paddingRight: 'max(1.5rem, calc((100vw - 1280px) / 2 + 1.5rem))'
             } : {}}
           >
-            <div className="h-[700px] w-full">
+            {/* Calendar Header with buttons */}
+            <div className="p-6 pb-4 flex justify-end items-center">
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSendTeacherSchedule}
+                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                  title="Send schedule via email"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={handleScheduleLesson}
+                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                  title="Schedule new lesson"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="px-6 pb-6">
+              <div className="h-[700px] w-full">
               <BigCalendar
                 localizer={localizer}
                 events={events}
@@ -1025,12 +1045,13 @@ export function Calendar() {
                   today: 'Today'
                 }}
               />
+              </div>
             </div>
           </div>
 
           {/* Lessons List - Below calendar */}
           <div className="bg-white rounded-lg shadow">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-start">
+            <div className="p-4 border-b border-gray-200">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">
                   {currentView === 'day' 
@@ -1044,22 +1065,6 @@ export function Calendar() {
                   {currentViewLessons.length} {currentViewLessons.length === 1 ? 'lesson' : 'lessons'} 
                   {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
                 </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSendTeacherSchedule}
-                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
-                  title="Send today's schedule via email"
-                >
-                  <MessageSquare className="h-5 w-5" />
-                </button>
-                <button
-                  onClick={handleScheduleLesson}
-                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                  title="Schedule new lesson"
-                >
-                  <Plus className="h-5 w-5" />
-                </button>
               </div>
             </div>
             <div className="overflow-y-auto max-h-[640px]">
@@ -1150,8 +1155,28 @@ export function Calendar() {
         // Day view: Keep side-by-side layout
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Calendar - Takes 2 columns */}
-          <div className="lg:col-span-2 bg-white rounded-lg shadow p-6">
-            <div className="h-[700px]">
+          <div className="lg:col-span-2 bg-white rounded-lg shadow">
+            {/* Calendar Header with buttons */}
+            <div className="p-6 pb-4 flex justify-end items-center">
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSendTeacherSchedule}
+                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                  title="Send schedule via email"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={handleScheduleLesson}
+                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                  title="Schedule new lesson"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="px-6 pb-6">
+              <div className="h-[700px]">
               <BigCalendar
                 localizer={localizer}
                 events={events}
@@ -1193,12 +1218,13 @@ export function Calendar() {
                   today: 'Today'
                 }}
               />
+              </div>
             </div>
           </div>
 
           {/* Lessons List - Takes 1 column */}
           <div className="bg-white rounded-lg shadow">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-start">
+            <div className="p-4 border-b border-gray-200">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">
                   {currentView === 'day' 
@@ -1212,22 +1238,6 @@ export function Calendar() {
                   {currentViewLessons.length} {currentViewLessons.length === 1 ? 'lesson' : 'lessons'} 
                   {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
                 </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSendTeacherSchedule}
-                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
-                  title="Send today's schedule via email"
-                >
-                  <MessageSquare className="h-5 w-5" />
-                </button>
-                <button
-                  onClick={handleScheduleLesson}
-                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                  title="Schedule new lesson"
-                >
-                  <Plus className="h-5 w-5" />
-                </button>
               </div>
             </div>
             <div className="overflow-y-auto max-h-[640px]">
@@ -2153,6 +2163,28 @@ export function Calendar() {
                         )}
                       </div>
                     )}
+                  </div>
+
+                  {/* Price */}
+                  <div>
+                    <div className="flex items-center gap-1.5 text-gray-600 mb-1.5">
+                      <span className="text-xs font-medium uppercase tracking-wide">Price</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-500">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={formData.price || 0}
+                        onChange={(e) => {
+                          const newPrice = parseFloat(e.target.value) || 0
+                          setFormData({ ...formData, price: newPrice })
+                        }}
+                        className="flex-1 text-sm border-gray-300 rounded-md focus:border-indigo-500 focus:ring-indigo-500"
+                        placeholder="0.00"
+                      />
+                    </div>
                   </div>
 
                   {/* Notes */}

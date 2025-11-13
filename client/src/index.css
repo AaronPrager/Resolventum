@@ -172,6 +172,12 @@ body {
   overflow: hidden;
 }
 
+/* Hide default event time labels in week/day view to avoid duplication */
+.rbc-time-view .rbc-event-label,
+.rbc-time-view .rbc-event-time {
+  display: none !important;
+}
+
 /* Events in week/day view */
 .rbc-day-slot .rbc-event {
   border: none;
