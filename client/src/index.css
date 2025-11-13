@@ -18,6 +18,8 @@ body {
 /* React Big Calendar Custom Styles */
 .rbc-calendar {
   font-family: inherit;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .rbc-header {
@@ -163,74 +165,28 @@ body {
   text-decoration: underline;
 }
 
-/* Week and Day View Styles */
+/* Week and Day View Styles - Basic styling only */
 .rbc-time-view {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   overflow: hidden;
 }
 
-/* Day name headers in week/day view */
-.rbc-time-view .rbc-header {
-  background-color: #e0e7ff;
-  color: #4338ca;
-  border-bottom: none;
-  padding: 12px 8px;
-  font-weight: 600;
-  text-align: center;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Time header container */
-.rbc-time-header {
-  border-bottom: 2px solid #c7d2fe;
-  background-color: #e0e7ff;
-}
-
-.rbc-time-header-content {
-  border-left: 1px solid #c7d2fe;
-}
-
-/* All-day events row */
-.rbc-time-view .rbc-allday-cell {
-  background-color: #fefefe;
-  min-height: 48px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.rbc-time-header.rbc-overflowing {
-  border-right: 1px solid #c7d2fe;
-}
-
-/* Time slots */
-.rbc-day-slot .rbc-time-slot {
-  border-top: 1px solid #f3f4f6;
-}
-
 /* Events in week/day view */
 .rbc-day-slot .rbc-event {
   border: none;
   box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  overflow: hidden !important;
+  max-width: 100% !important;
+  width: 100% !important;
 }
 
-/* Hide default event time labels in week/day view to avoid redundancy */
-.rbc-time-view .rbc-event-label,
-.rbc-time-view .rbc-event-time {
-  display: none !important;
-}
-
-/* Ensure custom event component fills the entire event area */
-.rbc-time-view .rbc-event-content {
-  width: 100%;
-  padding: 0;
-}
-
-/* Today column highlighting */
-.rbc-time-view .rbc-today {
-  background-color: #eff6ff;
+.rbc-day-slot .rbc-event-content {
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+  max-width: 100% !important;
+  width: 100% !important;
 }
 
 .rbc-agenda-view {

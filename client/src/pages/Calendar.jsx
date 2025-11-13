@@ -223,6 +223,7 @@ export function Calendar() {
     }
   }, [selectedLesson])
 
+
   const fetchLessons = async () => {
     try {
       const { data } = await api.get('/lessons')
@@ -729,8 +730,17 @@ export function Calendar() {
     
     if (isAllDay) {
       return (
-        <div className="flex items-center gap-1.5 min-w-0" style={{ width: '100%', padding: '2px 4px' }}>
-          <span className="truncate min-w-0 text-xs flex-1 font-medium">
+        <div className="flex items-center gap-1.5 min-w-0" style={{ width: '100%', maxWidth: '100%', padding: '2px 4px', overflow: 'hidden' }}>
+          <span 
+            className="truncate min-w-0 text-xs flex-1 font-medium" 
+            style={{ 
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: '100%'
+            }}
+            title={event.title}
+          >
             {event.title}
           </span>
         </div>
@@ -747,13 +757,14 @@ export function Calendar() {
     const displayText = `${startTime} - ${event.title}`
     
     return (
-      <div className="flex items-center gap-1.5 min-w-0" style={{ width: '100%', padding: '2px 4px' }}>
+      <div className="flex items-center gap-1.5 min-w-0" style={{ width: '100%', maxWidth: '100%', padding: '2px 4px', overflow: 'hidden' }}>
         <span 
           className="truncate min-w-0 text-xs flex-1 font-medium" 
           style={{ 
             overflow: 'hidden',
             textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap'
+            whiteSpace: 'nowrap',
+            maxWidth: '100%'
           }}
           title={displayText}
         >
@@ -955,104 +966,116 @@ export function Calendar() {
   const currentViewLessons = getViewLessons()
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full">
       {/* Calendar and Lessons List */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Calendar - Takes 2 columns */}
-        <div className="lg:col-span-2 bg-white rounded-lg shadow p-6">
-          <div className="h-[700px]">
-            <BigCalendar
-              localizer={localizer}
-              events={events}
-              startAccessor="start"
-              endAccessor="end"
-              selectable
-              components={{ 
-                month: { event: MonthEvent },
-                week: { event: DayWeekEvent },
-                day: { event: DayWeekEvent }
-              }}
-              onSelectEvent={(event) => {
-                const lesson = event.resource || event.lesson || event
-                setSelectedLesson(lesson)
-                // Don't show details card - just update the list
-                setShowDetails(false)
-              }}
-              onDoubleClickEvent={handleSelectEvent}
-              onSelectSlot={handleSelectSlot}
-              eventPropGetter={eventStyleGetter}
-              views={['month', 'week', 'day']}
-              view={currentView}
-              onView={(view) => {
-                setCurrentView(view)
-                setSelectedLesson(null)
-              }}
-              date={currentDate}
-              onNavigate={(date) => {
-                setCurrentDate(date)
-                setSelectedLesson(null)
-              }}
-              scrollToTime={new Date(1970, 1, 1, 10, 0, 0)}
-              style={{ height: '100%' }}
-              popup
-              showMultiDayTimes
-              messages={{
-                previous: '←',
-                next: '→',
-                today: 'Today'
-              }}
-            />
+      {(currentView === 'month' || currentView === 'week') ? (
+        // Month and Week views: Calendar full width, lessons below
+        <div className="space-y-6 w-full">
+          {/* Calendar - Full width, break out of container for week view */}
+          <div 
+            className={`bg-white rounded-lg shadow p-6 w-full ${
+              currentView === 'week' ? 'relative left-1/2 right-1/2 -translate-x-1/2' : ''
+            }`}
+            style={currentView === 'week' ? {
+              width: '100vw',
+              maxWidth: '100vw',
+              paddingLeft: 'max(1.5rem, calc((100vw - 1280px) / 2 + 1.5rem))',
+              paddingRight: 'max(1.5rem, calc((100vw - 1280px) / 2 + 1.5rem))'
+            } : {}}
+          >
+            <div className="h-[700px] w-full">
+              <BigCalendar
+                localizer={localizer}
+                events={events}
+                startAccessor="start"
+                endAccessor="end"
+                selectable
+                components={{ 
+                  month: { event: MonthEvent },
+                  week: { event: DayWeekEvent },
+                  day: { event: DayWeekEvent }
+                }}
+                onSelectEvent={(event) => {
+                  const lesson = event.resource || event.lesson || event
+                  setSelectedLesson(lesson)
+                  // Don't show details card - just update the list
+                  setShowDetails(false)
+                }}
+                onDoubleClickEvent={handleSelectEvent}
+                onSelectSlot={handleSelectSlot}
+                eventPropGetter={eventStyleGetter}
+                views={['month', 'week', 'day']}
+                view={currentView}
+                onView={(view) => {
+                  setCurrentView(view)
+                  setSelectedLesson(null)
+                }}
+                date={currentDate}
+                onNavigate={(date) => {
+                  setCurrentDate(date)
+                  setSelectedLesson(null)
+                }}
+                scrollToTime={new Date(1970, 1, 1, 10, 0, 0)}
+                style={{ height: '100%', width: '100%' }}
+                popup
+                showMultiDayTimes
+                messages={{
+                  previous: '←',
+                  next: '→',
+                  today: 'Today'
+                }}
+              />
+            </div>
           </div>
-        </div>
 
-        {/* Lessons List - Takes 1 column */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="p-4 border-b border-gray-200 flex justify-between items-start">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">
-                {currentView === 'day' 
-                  ? new Date(currentDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
-                  : currentView === 'week'
-                  ? `Week of ${new Date(currentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
-                  : new Date(currentDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
-                }
-              </h2>
-              <p className="text-sm text-gray-500 mt-1">
-                {currentViewLessons.length} {currentViewLessons.length === 1 ? 'lesson' : 'lessons'} 
-                {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleSendTeacherSchedule}
-                className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
-                title="Send today's schedule via email"
-              >
-                <MessageSquare className="h-5 w-5" />
-              </button>
-              <button
-                onClick={handleScheduleLesson}
-                className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
-                title="Schedule new lesson"
-              >
-                <Plus className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-          <div className="overflow-y-auto max-h-[640px]">
-            {currentViewLessons.length === 0 ? (
-              <div className="p-8 text-center text-gray-500 text-sm">
-                No lessons scheduled {currentView === 'day' ? 'today' : currentView === 'week' ? 'this week' : 'this month'}
+          {/* Lessons List - Below calendar */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-start">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {currentView === 'day' 
+                    ? new Date(currentDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+                    : currentView === 'week'
+                    ? `Week of ${new Date(currentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                    : new Date(currentDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                  }
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {currentViewLessons.length} {currentViewLessons.length === 1 ? 'lesson' : 'lessons'} 
+                  {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
+                </p>
               </div>
-            ) : (
-              <ul className="divide-y divide-gray-200">
-                {currentViewLessons.map((lesson) => {
-                  const startTime = new Date(lesson.dateTime)
-                  const endTime = new Date(startTime.getTime() + lesson.duration * 60000)
-                  const isSelected = selectedLesson?.id === lesson.id
-                  
-                  return (
-                    <li
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSendTeacherSchedule}
+                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                  title="Send today's schedule via email"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={handleScheduleLesson}
+                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                  title="Schedule new lesson"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto max-h-[640px]">
+              {currentViewLessons.length === 0 ? (
+                <div className="p-8 text-center text-gray-500 text-sm">
+                  No lessons scheduled {currentView === 'day' ? 'today' : currentView === 'week' ? 'this week' : 'this month'}
+                </div>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {currentViewLessons.map((lesson) => {
+                    const startTime = new Date(lesson.dateTime)
+                    const endTime = new Date(startTime.getTime() + lesson.duration * 60000)
+                    const isSelected = selectedLesson?.id === lesson.id
+                    
+                    return (
+                      <li
                       key={lesson.id}
                       id={isSelected ? 'selected-lesson' : undefined}
                       onClick={() => {
@@ -1118,11 +1141,180 @@ export function Calendar() {
                     </li>
                   )
                 })}
-              </ul>
-            )}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        // Day view: Keep side-by-side layout
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Calendar - Takes 2 columns */}
+          <div className="lg:col-span-2 bg-white rounded-lg shadow p-6">
+            <div className="h-[700px]">
+              <BigCalendar
+                localizer={localizer}
+                events={events}
+                startAccessor="start"
+                endAccessor="end"
+                selectable
+                components={{ 
+                  month: { event: MonthEvent },
+                  week: { event: DayWeekEvent },
+                  day: { event: DayWeekEvent }
+                }}
+                onSelectEvent={(event) => {
+                  const lesson = event.resource || event.lesson || event
+                  setSelectedLesson(lesson)
+                  // Don't show details card - just update the list
+                  setShowDetails(false)
+                }}
+                onDoubleClickEvent={handleSelectEvent}
+                onSelectSlot={handleSelectSlot}
+                eventPropGetter={eventStyleGetter}
+                views={['month', 'week', 'day']}
+                view={currentView}
+                onView={(view) => {
+                  setCurrentView(view)
+                  setSelectedLesson(null)
+                }}
+                date={currentDate}
+                onNavigate={(date) => {
+                  setCurrentDate(date)
+                  setSelectedLesson(null)
+                }}
+                scrollToTime={new Date(1970, 1, 1, 10, 0, 0)}
+                style={{ height: '100%' }}
+                popup
+                showMultiDayTimes
+                messages={{
+                  previous: '←',
+                  next: '→',
+                  today: 'Today'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Lessons List - Takes 1 column */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-start">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {currentView === 'day' 
+                    ? new Date(currentDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+                    : currentView === 'week'
+                    ? `Week of ${new Date(currentDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                    : new Date(currentDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                  }
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {currentViewLessons.length} {currentViewLessons.length === 1 ? 'lesson' : 'lessons'} 
+                  {currentView === 'day' ? ' today' : currentView === 'week' ? ' this week' : ' this month'}
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSendTeacherSchedule}
+                  className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
+                  title="Send today's schedule via email"
+                >
+                  <MessageSquare className="h-5 w-5" />
+                </button>
+                <button
+                  onClick={handleScheduleLesson}
+                  className="p-1.5 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors"
+                  title="Schedule new lesson"
+                >
+                  <Plus className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto max-h-[640px]">
+              {currentViewLessons.length === 0 ? (
+                <div className="p-8 text-center text-gray-500 text-sm">
+                  No lessons scheduled {currentView === 'day' ? 'today' : currentView === 'week' ? 'this week' : 'this month'}
+                </div>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {currentViewLessons.map((lesson) => {
+                    const startTime = new Date(lesson.dateTime)
+                    const endTime = new Date(startTime.getTime() + lesson.duration * 60000)
+                    const isSelected = selectedLesson?.id === lesson.id
+                    
+                    return (
+                      <li
+                        key={lesson.id}
+                        id={isSelected ? 'selected-lesson' : undefined}
+                        onClick={() => {
+                          setSelectedLesson(lesson)
+                          // Don't show details card - just highlight in list
+                          setShowDetails(false)
+                        }}
+                        onDoubleClick={() => handleSelectEvent({ lesson })}
+                        className={`cursor-pointer transition-colors ${
+                          isSelected 
+                            ? 'bg-indigo-50 border-l-4 border-indigo-600 pl-4 pr-4 py-4' 
+                            : 'hover:bg-gray-50 p-4'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 truncate">
+                              {lesson.student.firstName} {lesson.student.lastName}
+                            </p>
+                            <p className="text-xs text-gray-600 mt-1">{lesson.subject}</p>
+                            <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                              <span>{formatDate(lesson.dateTime)}</span>
+                              <span>•</span>
+                              {lesson.allDay ? (
+                                <span className="italic">All Day</span>
+                              ) : (
+                                <span>{formatTime(lesson.dateTime)} - {formatTime(endTime)}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex-shrink-0 flex items-center gap-2">
+                            {lesson.locationType === 'remote' ? (
+                              lesson.link && (
+                                <a
+                                  href={lesson.link.startsWith('http://') || lesson.link.startsWith('https://') ? lesson.link : `https://${lesson.link}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-indigo-600 hover:text-indigo-900 p-1"
+                                  title="Join video call"
+                                >
+                                  <Video className="h-4 w-4" />
+                                </a>
+                              )
+                            ) : (
+                              <div className="p-1" title="In person">
+                                <MapPin className="h-4 w-4 text-gray-400" />
+                              </div>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setSelectedLesson(lesson)
+                                handleDeleteLesson()
+                              }}
+                              className="text-red-600 hover:text-red-900 p-1"
+                              title="Delete lesson"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Details Panel - Right Side */}
       {showDetails && (
