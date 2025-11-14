@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
-import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Archive, ArchiveRestore } from 'lucide-react'
+import { Plus, Edit, Trash2, Phone, Mail, MapPin, User, Calendar, DollarSign, BookOpen, AlertCircle, Users as UsersIcon, X, ChevronUp, ChevronDown, FileText, Archive, ArchiveRestore, Info } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Students() {
+  const navigate = useNavigate()
   const [students, setStudents] = useState([])
   const [sortedStudents, setSortedStudents] = useState([])
   const [sortConfig, setSortConfig] = useState({ key: 'name', direction: 'asc' })
@@ -615,6 +617,13 @@ export function Students() {
                     <p className="text-sm text-gray-500 mt-1">{selectedStudent.subject || '-'}</p>
                   </div>
                   <div className="flex gap-2">
+                    <button
+                      onClick={() => navigate(`/students/${selectedStudent.id}`)}
+                      className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+                      title="More Info"
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
                     {selectedStudent.archived ? (
                       <button
                         onClick={() => handleArchive(selectedStudent.id, false)}
