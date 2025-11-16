@@ -35,6 +35,7 @@ import paymentsRoutes from './routes/payments.js';
 import invoicesRoutes from './routes/invoices.js';
 import reportsRoutes from './routes/reports.js';
 import profileRoutes from './routes/profile.js';
+import googleDriveRoutes from './routes/googledrive.js';
 
 const app = express();
 const PORT = process.env.PORT || 5002;
@@ -72,6 +73,7 @@ app.use('/api/payments', paymentsRoutes);
 app.use('/api/invoices', invoicesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/googledrive', googleDriveRoutes);
 
 // Serve uploaded files
 // Serve uploaded files (before error handlers)

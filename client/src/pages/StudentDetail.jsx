@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
-import { ArrowLeft, Phone, Mail, Calendar as CalendarIcon, Clock, DollarSign, MapPin, Video, FileText, BookOpen } from 'lucide-react'
+import { ArrowLeft, Phone, Mail, Calendar as CalendarIcon, Clock, DollarSign, MapPin, Video, FileText, BookOpen, Save, X, Link as LinkIcon, Upload, Paperclip } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function StudentDetail() {
@@ -12,10 +12,25 @@ export function StudentDetail() {
   const [selectedLesson, setSelectedLesson] = useState(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('past') // 'past' or 'future'
+  const [editedNotes, setEditedNotes] = useState('')
+  const [editedHomework, setEditedHomework] = useState('')
+  const [originalNotes, setOriginalNotes] = useState('')
+  const [originalHomework, setOriginalHomework] = useState('')
+  const [notesFiles, setNotesFiles] = useState([])
+  const [homeworkFiles, setHomeworkFiles] = useState([])
+  const [savingNotes, setSavingNotes] = useState(false)
+  const [savingHomework, setSavingHomework] = useState(false)
 
   useEffect(() => {
     fetchStudent()
   }, [id])
+
+  // Parse homework from notes if it exists
+  const parseHomeworkFromNotes = (notes) => {
+    if (!notes) return ''
+    const homeworkMatch = notes.match(/---HOMEWORK---\n(.*)/s)
+    return homeworkMatch ? homeworkMatch[1].trim() : ''
+  }
 
   const fetchStudent = async () => {
     try {
@@ -32,12 +47,14 @@ export function StudentDetail() {
       if (pastLessons.length > 0) {
         // Sort past descending (latest first)
         const sortedPast = [...pastLessons].sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime))
-        setSelectedLesson(sortedPast[0])
+        const lessonWithHomework = { ...sortedPast[0], homework: parseHomeworkFromNotes(sortedPast[0].notes) }
+        setSelectedLesson(lessonWithHomework)
         setActiveTab('past')
       } else if (futureLessons.length > 0) {
         // Sort future ascending (next first)
         const sortedFuture = [...futureLessons].sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
-        setSelectedLesson(sortedFuture[0])
+        const lessonWithHomework = { ...sortedFuture[0], homework: parseHomeworkFromNotes(sortedFuture[0].notes) }
+        setSelectedLesson(lessonWithHomework)
         setActiveTab('future')
       }
     } catch (error) {
@@ -112,6 +129,244 @@ export function StudentDetail() {
   const nowForCount = new Date()
   const futureCount = lessons.filter(lesson => new Date(lesson.dateTime) >= nowForCount).length
   const pastCount = lessons.filter(lesson => new Date(lesson.dateTime) < nowForCount).length
+
+  // Initialize edit state when lesson is selected
+  useEffect(() => {
+    if (selectedLesson) {
+      // Use academicNotes for Extended Info (not the regular notes field)
+      const academicNotesValue = selectedLesson.academicNotes || ''
+      setEditedNotes(academicNotesValue)
+      setOriginalNotes(academicNotesValue)
+      // Extract homework from academicNotes if it exists (using a delimiter)
+      const homeworkValue = selectedLesson.homework || parseHomeworkFromNotes(selectedLesson.academicNotes || '')
+      setEditedHomework(homeworkValue)
+      setOriginalHomework(homeworkValue)
+      setNotesFiles([])
+      setHomeworkFiles([])
+    }
+  }, [selectedLesson])
+
+  // Check if notes have changed
+  const notesChanged = editedNotes !== originalNotes || notesFiles.length > 0
+
+  // Check if homework has changed
+  const homeworkChanged = editedHomework !== originalHomework || homeworkFiles.length > 0
+
+  const handleSaveNotes = async () => {
+    if (!selectedLesson) return
+
+    try {
+      setSavingNotes(true)
+      // Get current homework value (don't change it)
+      const currentHomework = selectedLesson.homework || parseHomeworkFromNotes(selectedLesson.academicNotes || '')
+      // Combine academic notes with homework delimiter
+      const academicNotesWithHomework = editedNotes + (currentHomework ? `\n\n---HOMEWORK---\n${currentHomework}` : '')
+      
+      // Check if we have files to upload
+      const hasFiles = notesFiles && notesFiles.length > 0
+      
+      if (hasFiles) {
+        // Use FormData for file uploads
+        const formData = new FormData()
+        formData.append('academicNotes', academicNotesWithHomework)
+        formData.append('studentId', selectedLesson.studentId)
+        formData.append('dateTime', selectedLesson.dateTime)
+        formData.append('duration', selectedLesson.duration.toString())
+        formData.append('subject', selectedLesson.subject)
+        formData.append('price', selectedLesson.price.toString())
+        formData.append('locationType', selectedLesson.locationType)
+        if (selectedLesson.link) {
+          formData.append('link', selectedLesson.link)
+        }
+        
+        // Append notes files only
+        if (notesFiles && notesFiles.length > 0) {
+          notesFiles.forEach((file) => {
+            formData.append('notesFiles', file)
+          })
+        }
+        
+        const { data } = await api.put(`/lessons/${selectedLesson.id}`, formData)
+        
+        // Clear file arrays after successful upload
+        setNotesFiles([])
+        
+        // Update original notes to reflect saved state
+        setOriginalNotes(editedNotes)
+        
+        // Update the lesson in the lessons array
+        const updatedLesson = { ...data, homework: currentHomework }
+        const updatedLessons = lessons.map(lesson => 
+          lesson.id === selectedLesson.id ? updatedLesson : lesson
+        )
+        setLessons(updatedLessons)
+        setSelectedLesson(updatedLesson)
+      } else {
+        // No files, use regular JSON request
+        const updateData = {
+          academicNotes: academicNotesWithHomework,
+          // Keep all other fields the same
+          studentId: selectedLesson.studentId,
+          dateTime: selectedLesson.dateTime,
+          duration: selectedLesson.duration,
+          subject: selectedLesson.subject,
+          price: selectedLesson.price,
+          locationType: selectedLesson.locationType,
+          link: selectedLesson.link
+        }
+
+        const { data } = await api.put(`/lessons/${selectedLesson.id}`, updateData)
+        
+        // Update original notes to reflect saved state
+        setOriginalNotes(editedNotes)
+        
+        // Update the lesson in the lessons array
+        const updatedLesson = { ...data, homework: currentHomework }
+        const updatedLessons = lessons.map(lesson => 
+          lesson.id === selectedLesson.id ? updatedLesson : lesson
+        )
+        setLessons(updatedLessons)
+        setSelectedLesson(updatedLesson)
+      }
+      
+      toast.success('Academic notes saved successfully')
+    } catch (error) {
+      console.error('Error updating academic notes:', error)
+      toast.error('Failed to save academic notes')
+    } finally {
+      setSavingNotes(false)
+    }
+  }
+
+  const handleSaveHomework = async () => {
+    if (!selectedLesson) return
+
+    try {
+      setSavingHomework(true)
+      // Get current academic notes value (don't change it)
+      const currentAcademicNotes = selectedLesson.academicNotes && selectedLesson.academicNotes.includes('---HOMEWORK---')
+        ? selectedLesson.academicNotes.split('---HOMEWORK---')[0].trim()
+        : (selectedLesson.academicNotes || '')
+      // Combine academic notes with homework delimiter
+      const academicNotesWithHomework = currentAcademicNotes + (editedHomework ? `\n\n---HOMEWORK---\n${editedHomework}` : '')
+      
+      // Check if we have files to upload
+      const hasFiles = homeworkFiles && homeworkFiles.length > 0
+      
+      if (hasFiles) {
+        // Use FormData for file uploads
+        const formData = new FormData()
+        formData.append('academicNotes', academicNotesWithHomework)
+        formData.append('studentId', selectedLesson.studentId)
+        formData.append('dateTime', selectedLesson.dateTime)
+        formData.append('duration', selectedLesson.duration.toString())
+        formData.append('subject', selectedLesson.subject)
+        formData.append('price', selectedLesson.price.toString())
+        formData.append('locationType', selectedLesson.locationType)
+        if (selectedLesson.link) {
+          formData.append('link', selectedLesson.link)
+        }
+        
+        // Append homework files only
+        if (homeworkFiles && homeworkFiles.length > 0) {
+          homeworkFiles.forEach((file) => {
+            formData.append('homeworkFiles', file)
+          })
+        }
+        
+        const { data } = await api.put(`/lessons/${selectedLesson.id}`, formData)
+        
+        // Clear file arrays after successful upload
+        setHomeworkFiles([])
+        
+        // Update original homework to reflect saved state
+        setOriginalHomework(editedHomework)
+        
+        // Update the lesson in the lessons array
+        const updatedLesson = { ...data, homework: editedHomework }
+        const updatedLessons = lessons.map(lesson => 
+          lesson.id === selectedLesson.id ? updatedLesson : lesson
+        )
+        setLessons(updatedLessons)
+        setSelectedLesson(updatedLesson)
+      } else {
+        // No files, use regular JSON request
+        const updateData = {
+          academicNotes: academicNotesWithHomework,
+          // Keep all other fields the same
+          studentId: selectedLesson.studentId,
+          dateTime: selectedLesson.dateTime,
+          duration: selectedLesson.duration,
+          subject: selectedLesson.subject,
+          price: selectedLesson.price,
+          locationType: selectedLesson.locationType,
+          link: selectedLesson.link
+        }
+
+        const { data } = await api.put(`/lessons/${selectedLesson.id}`, updateData)
+        
+        // Update original homework to reflect saved state
+        setOriginalHomework(editedHomework)
+        
+        // Update the lesson in the lessons array
+        const updatedLesson = { ...data, homework: editedHomework }
+        const updatedLessons = lessons.map(lesson => 
+          lesson.id === selectedLesson.id ? updatedLesson : lesson
+        )
+        setLessons(updatedLessons)
+        setSelectedLesson(updatedLesson)
+      }
+      
+      toast.success('Homework saved successfully')
+    } catch (error) {
+      console.error('Error updating homework:', error)
+      toast.error('Failed to save homework')
+    } finally {
+      setSavingHomework(false)
+    }
+  }
+
+  const handleFileUpload = (e, type) => {
+    const files = Array.from(e.target.files)
+    if (type === 'notes') {
+      setNotesFiles(prev => [...prev, ...files])
+    } else {
+      setHomeworkFiles(prev => [...prev, ...files])
+    }
+  }
+
+  const removeFile = (index, type) => {
+    if (type === 'notes') {
+      setNotesFiles(prev => prev.filter((_, i) => i !== index))
+    } else {
+      setHomeworkFiles(prev => prev.filter((_, i) => i !== index))
+    }
+  }
+
+  const handleDeleteStoredFile = async (fileType, fileIndex) => {
+    if (!selectedLesson) return
+
+    try {
+      const { data } = await api.delete(`/lessons/${selectedLesson.id}/files`, {
+        data: { fileType, fileIndex }
+      })
+      
+      // Update the lesson with the new data
+      const updatedLesson = { ...data, homework: parseHomeworkFromNotes(data.notes || '') }
+      setSelectedLesson(updatedLesson)
+      
+      // Update in lessons array
+      const updatedLessons = lessons.map(lesson => 
+        lesson.id === selectedLesson.id ? updatedLesson : lesson
+      )
+      setLessons(updatedLessons)
+      
+      toast.success('File deleted successfully')
+    } catch (error) {
+      console.error('Error deleting file:', error)
+      toast.error(error.response?.data?.message || 'Failed to delete file')
+    }
+  }
 
   if (loading) {
     return (
@@ -202,7 +457,8 @@ export function StudentDetail() {
                     const pastLessons = lessons.filter(lesson => new Date(lesson.dateTime) < now)
                     if (pastLessons.length > 0) {
                       const sorted = [...pastLessons].sort((a, b) => new Date(b.dateTime) - new Date(a.dateTime))
-                      setSelectedLesson(sorted[0])
+                      const lessonWithHomework = { ...sorted[0], homework: parseHomeworkFromNotes(sorted[0].notes) }
+                      setSelectedLesson(lessonWithHomework)
                     }
                   }}
                   className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -221,7 +477,8 @@ export function StudentDetail() {
                     const futureLessons = lessons.filter(lesson => new Date(lesson.dateTime) >= now)
                     if (futureLessons.length > 0) {
                       const sorted = [...futureLessons].sort((a, b) => new Date(a.dateTime) - new Date(b.dateTime))
-                      setSelectedLesson(sorted[0])
+                      const lessonWithHomework = { ...sorted[0], homework: parseHomeworkFromNotes(sorted[0].notes) }
+                      setSelectedLesson(lessonWithHomework)
                     }
                   }}
                   className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -246,7 +503,10 @@ export function StudentDetail() {
                     return (
                       <li
                         key={lesson.id}
-                        onClick={() => setSelectedLesson(lesson)}
+                        onClick={() => {
+                          const lessonWithHomework = { ...lesson, homework: parseHomeworkFromNotes(lesson.notes) }
+                          setSelectedLesson(lessonWithHomework)
+                        }}
                         className={`cursor-pointer transition-colors ${
                           isSelected
                             ? 'bg-indigo-50 border-l-4 border-indigo-600'
@@ -292,7 +552,9 @@ export function StudentDetail() {
           {/* Right: Lesson Details */}
           <div className="lg:col-span-2 bg-white rounded-lg shadow flex flex-col" style={{ minHeight: '600px' }}>
             <div className="p-6 border-b border-gray-200 flex-shrink-0">
-              <h2 className="text-lg font-semibold text-gray-900">Lesson Details</h2>
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-semibold text-gray-900">Lesson Details</h2>
+              </div>
             </div>
             <div className="p-8 flex-1 overflow-y-auto">
               {selectedLesson ? (
@@ -377,31 +639,219 @@ export function StudentDetail() {
                     </div>
                   </div>
 
-                  {/* Notes */}
+                  {/* Academic Notes */}
                   <div className="pt-6 border-t border-gray-200">
-                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
-                      <FileText className="h-4 w-4" />
-                      <span>Notes</span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <FileText className="h-4 w-4" />
+                        <span>Academic Notes</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md cursor-pointer transition-colors">
+                          <Upload className="h-3 w-3" />
+                          <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => handleFileUpload(e, 'notes')}
+                          />
+                          Attach Files
+                        </label>
+                        <button
+                          onClick={handleSaveNotes}
+                          disabled={!notesChanged || savingNotes}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Save className="h-3 w-3" />
+                          {savingNotes ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
                     </div>
-                    <div className="bg-gray-50 rounded-md p-6">
-                      <p className={`text-base whitespace-pre-wrap ${
-                        selectedLesson.notes ? 'text-gray-900' : 'text-gray-400 italic'
-                      }`}>
-                        {selectedLesson.notes || 'No notes for this lesson'}
-                      </p>
+                    <div className="space-y-3">
+                      <textarea
+                        value={editedNotes}
+                        onChange={(e) => setEditedNotes(e.target.value)}
+                        rows={6}
+                        className="w-full text-base border-gray-300 rounded-md focus:border-indigo-500 focus:ring-indigo-500 resize-none"
+                        placeholder="Enter academic notes... You can include links, text, etc."
+                      />
+                      {notesFiles.length > 0 && (
+                        <div className="space-y-2">
+                          {notesFiles.map((file, index) => (
+                            <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-md">
+                              <Paperclip className="h-4 w-4 text-gray-400" />
+                              <span className="text-sm text-gray-700 flex-1 truncate">{file.name}</span>
+                              <button
+                                onClick={() => removeFile(index, 'notes')}
+                                className="text-red-600 hover:text-red-800"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Display stored files */}
+                      {selectedLesson.notesFiles && (() => {
+                        try {
+                          const files = JSON.parse(selectedLesson.notesFiles)
+                          if (files && files.length > 0) {
+                            return (
+                              <div className="space-y-2">
+                                <div className="text-xs text-gray-500 font-medium">Attached Files:</div>
+                                {files.map((file, index) => (
+                                  <div key={index} className="flex items-center gap-2 p-2 bg-white rounded-md border border-gray-200">
+                                    <Paperclip className="h-4 w-4 text-gray-400" />
+                                    <span className="text-sm text-gray-700 flex-1 truncate">{file.fileName}</span>
+                                    <div className="flex items-center gap-2">
+                                      {file.storageType === 'googleDrive' && file.webViewLink ? (
+                                        <a
+                                          href={file.webViewLink}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-indigo-600 hover:text-indigo-900 text-xs"
+                                        >
+                                          View
+                                        </a>
+                                      ) : file.filePath ? (
+                                        <a
+                                          href={file.filePath}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-indigo-600 hover:text-indigo-900 text-xs"
+                                        >
+                                          View
+                                        </a>
+                                      ) : null}
+                                      <button
+                                        onClick={() => handleDeleteStoredFile('notes', index)}
+                                        className="text-red-600 hover:text-red-800 text-xs"
+                                        title="Delete file"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          }
+                        } catch (e) {
+                          return null
+                        }
+                        return null
+                      })()}
+                      <div className="text-xs text-gray-500">
+                        Tip: You can paste links directly in the text. They will be clickable when saved.
+                      </div>
                     </div>
                   </div>
 
-                  {/* Homework - placeholder for future implementation */}
+                  {/* Homework */}
                   <div className="pt-6 border-t border-gray-200">
-                    <div className="flex items-center gap-2 text-sm text-gray-500 mb-3">
-                      <BookOpen className="h-4 w-4" />
-                      <span>Homework</span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        <BookOpen className="h-4 w-4" />
+                        <span>Homework</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md cursor-pointer transition-colors">
+                          <Upload className="h-3 w-3" />
+                          <input
+                            type="file"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => handleFileUpload(e, 'homework')}
+                          />
+                          Attach Files
+                        </label>
+                        <button
+                          onClick={handleSaveHomework}
+                          disabled={!homeworkChanged || savingHomework}
+                          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Save className="h-3 w-3" />
+                          {savingHomework ? 'Saving...' : 'Save'}
+                        </button>
+                      </div>
                     </div>
-                    <div className="bg-gray-50 rounded-md p-6">
-                      <p className="text-base text-gray-400 italic">
-                        No homework assigned for this lesson
-                      </p>
+                    <div className="space-y-3">
+                      <textarea
+                        value={editedHomework}
+                        onChange={(e) => setEditedHomework(e.target.value)}
+                        rows={6}
+                        className="w-full text-base border-gray-300 rounded-md focus:border-indigo-500 focus:ring-indigo-500 resize-none"
+                        placeholder="Enter homework assignment... You can include links, text, etc."
+                      />
+                      {homeworkFiles.length > 0 && (
+                        <div className="space-y-2">
+                          {homeworkFiles.map((file, index) => (
+                            <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded-md">
+                              <Paperclip className="h-4 w-4 text-gray-400" />
+                              <span className="text-sm text-gray-700 flex-1 truncate">{file.name}</span>
+                              <button
+                                onClick={() => removeFile(index, 'homework')}
+                                className="text-red-600 hover:text-red-800"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Display stored homework files */}
+                      {selectedLesson.homeworkFiles && (() => {
+                        try {
+                          const files = JSON.parse(selectedLesson.homeworkFiles)
+                          if (files && files.length > 0) {
+                            return (
+                              <div className="space-y-2">
+                                <div className="text-xs text-gray-500 font-medium">Attached Files:</div>
+                                {files.map((file, index) => (
+                                  <div key={index} className="flex items-center gap-2 p-2 bg-white rounded-md border border-gray-200">
+                                    <Paperclip className="h-4 w-4 text-gray-400" />
+                                    <span className="text-sm text-gray-700 flex-1 truncate">{file.fileName}</span>
+                                    <div className="flex items-center gap-2">
+                                      {file.storageType === 'googleDrive' && file.webViewLink ? (
+                                        <a
+                                          href={file.webViewLink}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-indigo-600 hover:text-indigo-900 text-xs"
+                                        >
+                                          View
+                                        </a>
+                                      ) : file.filePath ? (
+                                        <a
+                                          href={file.filePath}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-indigo-600 hover:text-indigo-900 text-xs"
+                                        >
+                                          View
+                                        </a>
+                                      ) : null}
+                                      <button
+                                        onClick={() => handleDeleteStoredFile('homework', index)}
+                                        className="text-red-600 hover:text-red-800 text-xs"
+                                        title="Delete file"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          }
+                        } catch (e) {
+                          return null
+                        }
+                        return null
+                      })()}
+                      <div className="text-xs text-gray-500">
+                        Tip: You can paste links directly in the text. They will be clickable when saved.
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -3,9 +3,48 @@ import { body, validationResult } from 'express-validator';
 import { authenticateToken } from '../middleware/auth.js';
 import prisma from '../prisma/client.js';
 import { v4 as uuidv4 } from 'uuid';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 // Email functions to students/parents are disabled - only teacher schedule emails are allowed
 
 const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Create uploads directory for lesson files
+const lessonUploadsDir = path.join(__dirname, '../uploads/lessons');
+if (!fs.existsSync(lessonUploadsDir)) {
+  fs.mkdirSync(lessonUploadsDir, { recursive: true });
+}
+
+// Configure multer for lesson file uploads
+const lessonFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const lessonId = req.params.id || 'temp';
+    const lessonDir = path.join(lessonUploadsDir, lessonId);
+    if (!fs.existsSync(lessonDir)) {
+      fs.mkdirSync(lessonDir, { recursive: true });
+    }
+    cb(null, lessonDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename: timestamp-originalname
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    cb(null, `${uniqueSuffix}-${name}${ext}`);
+  }
+});
+
+const uploadLessonFiles = multer({
+  storage: lessonFileStorage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit per file
+  }
+});
 
 // Helper function to calculate recurring lesson dates
 // endDate should be inclusive - lessons are created up to and including the end date
@@ -757,11 +796,14 @@ router.patch('/:id/unlink-payment', async (req, res) => {
   }
 });
 
-// Update lesson
-router.put('/:id', async (req, res) => {
+// Update lesson (with optional file uploads)
+router.put('/:id', authenticateToken, uploadLessonFiles.fields([
+  { name: 'notesFiles', maxCount: 10 },
+  { name: 'homeworkFiles', maxCount: 10 }
+]), async (req, res) => {
   try {
     const { 
-      studentId, dateTime, duration, subject, price, notes, status,
+      studentId, dateTime, duration, subject, price, notes, academicNotes, status,
       locationType, link, isRecurring, recurringFrequency, recurringEndDate,
       allDay
     } = req.body;
@@ -810,6 +852,150 @@ router.put('/:id', async (req, res) => {
       finalPrice = currentLesson.price;
     }
 
+    // Get user's file storage preference
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { 
+        fileStorageType: true,
+        googleDriveAccessToken: true 
+      }
+    });
+
+    console.log('User fileStorageType:', user?.fileStorageType);
+    console.log('Google Drive connected:', !!user?.googleDriveAccessToken);
+    console.log('Files received:', req.files ? Object.keys(req.files) : 'none');
+    
+    // Determine if we should use Google Drive
+    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
+    
+    if (user?.fileStorageType === 'googleDrive' && !user?.googleDriveAccessToken) {
+      console.warn('User selected Google Drive but is not connected. Falling back to local storage.');
+    }
+
+    // Handle file uploads
+    let notesFilesMetadata = currentLesson.notesFiles ? JSON.parse(currentLesson.notesFiles) : [];
+    let homeworkFilesMetadata = currentLesson.homeworkFiles ? JSON.parse(currentLesson.homeworkFiles) : [];
+
+    if (req.files) {
+      const { notesFiles, homeworkFiles } = req.files;
+
+      // Process notes files
+      if (notesFiles && notesFiles.length > 0) {
+        console.log(`Processing ${notesFiles.length} notes file(s), useGoogleDrive: ${useGoogleDrive}`);
+        if (useGoogleDrive) {
+          // Upload to Google Drive
+          const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
+          const studentName = `${student.firstName} ${student.lastName}`;
+          const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
+
+          for (const file of notesFiles) {
+            try {
+              const fileBuffer = fs.readFileSync(file.path);
+              const result = await uploadFileToDrive(
+                req.user.id,
+                fileBuffer,
+                file.originalname,
+                file.mimetype,
+                studentFolder.folderId
+              );
+              
+              notesFilesMetadata.push({
+                fileName: file.originalname,
+                fileId: result.fileId,
+                webViewLink: result.webViewLink,
+                storageType: 'googleDrive',
+                uploadedAt: new Date().toISOString()
+              });
+              
+              // Clean up local temp file
+              fs.unlinkSync(file.path);
+              console.log(`Successfully uploaded notes file "${file.originalname}" to Google Drive`);
+            } catch (error) {
+              console.error('Error uploading notes file to Google Drive:', error);
+              console.error('Error details:', error.message, error.stack);
+              // Fallback to local storage
+              const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+              notesFilesMetadata.push({
+                fileName: file.originalname,
+                filePath: relativePath,
+                storageType: 'local',
+                uploadedAt: new Date().toISOString()
+              });
+            }
+          }
+        } else {
+          // Local storage - files already saved by multer
+          for (const file of notesFiles) {
+            const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+            notesFilesMetadata.push({
+              fileName: file.originalname,
+              filePath: relativePath,
+              storageType: 'local',
+              uploadedAt: new Date().toISOString()
+            });
+          }
+        }
+      }
+
+      // Process homework files
+      if (homeworkFiles && homeworkFiles.length > 0) {
+        console.log(`Processing ${homeworkFiles.length} homework file(s), useGoogleDrive: ${useGoogleDrive}`);
+        if (useGoogleDrive) {
+          // Upload to Google Drive
+          const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
+          const studentName = `${student.firstName} ${student.lastName}`;
+          const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
+
+          for (const file of homeworkFiles) {
+            try {
+              const fileBuffer = fs.readFileSync(file.path);
+              const result = await uploadFileToDrive(
+                req.user.id,
+                fileBuffer,
+                file.originalname,
+                file.mimetype,
+                studentFolder.folderId
+              );
+              
+              homeworkFilesMetadata.push({
+                fileName: file.originalname,
+                fileId: result.fileId,
+                webViewLink: result.webViewLink,
+                storageType: 'googleDrive',
+                uploadedAt: new Date().toISOString()
+              });
+              
+              // Clean up local temp file
+              fs.unlinkSync(file.path);
+              console.log(`Successfully uploaded homework file "${file.originalname}" to Google Drive`);
+            } catch (error) {
+              console.error('Error uploading homework file to Google Drive:', error);
+              console.error('Error details:', error.message, error.stack);
+              // Fallback to local storage
+              const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+              homeworkFilesMetadata.push({
+                fileName: file.originalname,
+                filePath: relativePath,
+                storageType: 'local',
+                uploadedAt: new Date().toISOString()
+              });
+            }
+          }
+        } else {
+          // Local storage - files already saved by multer
+          for (const file of homeworkFiles) {
+            const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+            homeworkFilesMetadata.push({
+              fileName: file.originalname,
+              filePath: relativePath,
+              storageType: 'local',
+              uploadedAt: new Date().toISOString()
+            });
+          }
+        }
+      }
+    }
+
     const updateData = {
       studentId: finalStudentId,
       dateTime: new Date(dateTime),
@@ -817,6 +1003,9 @@ router.put('/:id', async (req, res) => {
       subject: subject !== undefined ? subject : currentLesson.subject,
       price: finalPrice,
       notes: notes !== undefined ? (notes || null) : currentLesson.notes,
+      academicNotes: academicNotes !== undefined ? (academicNotes || null) : currentLesson.academicNotes,
+      notesFiles: notesFilesMetadata.length > 0 ? JSON.stringify(notesFilesMetadata) : null,
+      homeworkFiles: homeworkFilesMetadata.length > 0 ? JSON.stringify(homeworkFilesMetadata) : null,
       locationType: locationType || currentLesson.locationType || 'in-person',
       link: link !== undefined ? (link || null) : currentLesson.link,
       // iCal-style options
@@ -1640,6 +1829,87 @@ router.delete('/:id/recurring-future', async (req, res) => {
 });
 
 // Delete lesson
+// Delete a file from a lesson
+router.delete('/:id/files', authenticateToken, async (req, res) => {
+  try {
+    const { fileType, fileIndex } = req.body; // fileType: 'notes' or 'homework', fileIndex: index in array
+    
+    if (!fileType || fileIndex === undefined) {
+      return res.status(400).json({ message: 'fileType and fileIndex are required' });
+    }
+
+    // Verify lesson belongs to user
+    const lesson = await prisma.lesson.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!lesson) {
+      return res.status(404).json({ message: 'Lesson not found' });
+    }
+
+    // Get the file metadata array
+    const filesField = fileType === 'notes' ? 'notesFiles' : 'homeworkFiles';
+    const currentFiles = lesson[filesField] ? JSON.parse(lesson[filesField]) : [];
+    
+    if (fileIndex < 0 || fileIndex >= currentFiles.length) {
+      return res.status(400).json({ message: 'Invalid file index' });
+    }
+
+    const fileToDelete = currentFiles[fileIndex];
+
+    // Delete the file from storage
+    if (fileToDelete.storageType === 'googleDrive' && fileToDelete.fileId) {
+      try {
+        const { deleteFileFromDrive } = await import('../utils/googleDrive.js');
+        await deleteFileFromDrive(req.user.id, fileToDelete.fileId);
+        console.log(`Deleted Google Drive file: ${fileToDelete.fileName}`);
+      } catch (error) {
+        console.error('Error deleting Google Drive file:', error);
+        // Continue to remove from metadata even if deletion fails
+      }
+    } else if (fileToDelete.storageType === 'local' && fileToDelete.filePath) {
+      try {
+        // Extract the file path and delete from filesystem
+        const filePath = path.join(__dirname, '..', fileToDelete.filePath);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`Deleted local file: ${fileToDelete.fileName}`);
+        }
+      } catch (error) {
+        console.error('Error deleting local file:', error);
+        // Continue to remove from metadata even if deletion fails
+      }
+    }
+
+    // Remove the file from the metadata array
+    const updatedFiles = currentFiles.filter((_, index) => index !== fileIndex);
+
+    // Update the lesson
+    const updateData = {
+      [filesField]: updatedFiles.length > 0 ? JSON.stringify(updatedFiles) : null
+    };
+
+    await prisma.lesson.update({
+      where: { id: req.params.id },
+      data: updateData
+    });
+
+    // Fetch updated lesson
+    const updatedLesson = await prisma.lesson.findUnique({
+      where: { id: req.params.id },
+      include: { student: true }
+    });
+
+    res.json(updatedLesson);
+  } catch (error) {
+    console.error('Delete file error:', error);
+    res.status(500).json({ message: 'Error deleting file' });
+  }
+});
+
 router.delete('/:id', async (req, res) => {
   try {
     // Verify lesson belongs to user

@@ -58,7 +58,12 @@ router.get('/', authenticateToken, async (req, res) => {
         zelle: true,
         autoEmailEnabled: true,
         autoEmailTime: true,
-        autoEmailAddress: true
+        autoEmailAddress: true,
+        fileStorageType: true,
+        googleDriveAccessToken: true,
+        googleDriveRefreshToken: true,
+        googleDriveTokenExpiry: true,
+        googleDriveFolderId: true
       }
     });
 
@@ -80,7 +85,7 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
     console.log('File received:', req.file ? `Yes (${req.file.size} bytes, ${req.file.mimetype})` : 'No');
     console.log('Body fields:', { name: req.body.name, email: req.body.email, companyName: req.body.companyName, phone: req.body.phone, address: req.body.address, venmo: req.body.venmo, zelle: req.body.zelle });
     
-    const { name, email, companyName, phone, address, venmo, zelle, autoEmailEnabled, autoEmailTime, autoEmailAddress } = req.body;
+    const { name, email, companyName, phone, address, venmo, zelle, autoEmailEnabled, autoEmailTime, autoEmailAddress, fileStorageType, googleDriveFolderId } = req.body;
     const updateData = {};
 
     if (name !== undefined) updateData.name = name;
@@ -120,6 +125,15 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
       } else {
         updateData.autoEmailAddress = null;
       }
+    }
+    if (fileStorageType !== undefined) {
+      // Only allow 'local' or 'googleDrive'
+      if (fileStorageType === 'local' || fileStorageType === 'googleDrive') {
+        updateData.fileStorageType = fileStorageType;
+      }
+    }
+    if (googleDriveFolderId !== undefined) {
+      updateData.googleDriveFolderId = googleDriveFolderId || null;
     }
 
     // Handle logo upload
@@ -203,7 +217,12 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
         zelle: true,
         autoEmailEnabled: true,
         autoEmailTime: true,
-        autoEmailAddress: true
+        autoEmailAddress: true,
+        fileStorageType: true,
+        googleDriveAccessToken: true,
+        googleDriveRefreshToken: true,
+        googleDriveTokenExpiry: true,
+        googleDriveFolderId: true
       }
     });
 

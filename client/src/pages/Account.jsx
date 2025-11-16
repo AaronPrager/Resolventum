@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
-import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign, Clock, Send, AlertTriangle, Trash2 } from 'lucide-react'
+import { Upload, X, Building2, Phone, Mail, MapPin, User, DollarSign, Clock, Send, AlertTriangle, Trash2, HardDrive, Cloud, CheckCircle, AlertCircle } from 'lucide-react'
 
 export function Account() {
   const { user, updateUser, logout } = useAuth()
@@ -28,11 +28,16 @@ export function Account() {
     zelle: '',
     autoEmailEnabled: false,
     autoEmailTime: '08:00',
-    autoEmailAddress: ''
+    autoEmailAddress: '',
+    fileStorageType: 'local',
+    googleDriveFolderId: ''
   })
   const [profileLoading, setProfileLoading] = useState(false)
   const [logoPreview, setLogoPreview] = useState(null)
   const [logoFile, setLogoFile] = useState(null)
+  const [googleDriveConnected, setGoogleDriveConnected] = useState(false)
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [connectingGoogleDrive, setConnectingGoogleDrive] = useState(false)
 
   useEffect(() => {
     loadProfile()
@@ -40,7 +45,12 @@ export function Account() {
 
   const loadProfile = async () => {
       const { data } = await api.get('/profile')
-      setProfile(data)
+      setProfile({
+        ...data,
+        fileStorageType: data.fileStorageType || 'local',
+        googleDriveFolderId: data.googleDriveFolderId || ''
+      })
+      setGoogleDriveConnected(!!data.googleDriveAccessToken)
       if (data.logoUrl) {
         // If logoUrl is already a full URL, use it as is
         // If it starts with /uploads, use it directly (will be proxied by Vite)
@@ -72,6 +82,10 @@ export function Account() {
       formData.append('autoEmailEnabled', profile.autoEmailEnabled)
       formData.append('autoEmailTime', profile.autoEmailTime || '')
       formData.append('autoEmailAddress', profile.autoEmailAddress || '')
+      formData.append('fileStorageType', profile.fileStorageType || 'local')
+      if (profile.googleDriveFolderId) {
+        formData.append('googleDriveFolderId', profile.googleDriveFolderId)
+      }
       
       if (logoFile) {
         formData.append('logo', logoFile)
@@ -180,6 +194,72 @@ export function Account() {
       setDeleteLoading(false)
     }
   }
+
+  const handleConnectGoogleDrive = async () => {
+    try {
+      setConnectingGoogleDrive(true)
+      const { data } = await api.get('/googledrive/auth-url')
+      
+      if (!data.authUrl) {
+        toast.error('Failed to get Google authentication URL')
+        setConnectingGoogleDrive(false)
+        return
+      }
+
+      // Show message to user
+      toast.loading('Redirecting to Google...', { id: 'google-auth' })
+      
+      // Redirect to Google's OAuth page where user will enter their Google email and password
+      window.location.href = data.authUrl
+    } catch (error) {
+      console.error('Error getting Google auth URL:', error)
+      setConnectingGoogleDrive(false)
+      toast.error(error.response?.data?.message || 'Failed to connect to Google Drive. Please make sure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are configured.')
+    }
+  }
+
+  const handleDisconnectGoogleDrive = async () => {
+    try {
+      await api.post('/googledrive/disconnect')
+      setGoogleDriveConnected(false)
+      setProfile({ ...profile, fileStorageType: 'local' })
+      toast.success('Google Drive disconnected successfully')
+    } catch (error) {
+      console.error('Error disconnecting Google Drive:', error)
+      toast.error('Failed to disconnect Google Drive')
+    }
+  }
+
+  const handleTestGoogleDrive = async () => {
+    try {
+      setTestingConnection(true)
+      const { data } = await api.get('/googledrive/test')
+      if (data.connected) {
+        toast.success('Google Drive connection successful!')
+      } else {
+        toast.error(data.message || 'Google Drive connection failed')
+      }
+    } catch (error) {
+      console.error('Error testing Google Drive:', error)
+      toast.error('Failed to test Google Drive connection')
+    } finally {
+      setTestingConnection(false)
+    }
+  }
+
+  // Check for Google Drive callback on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    if (urlParams.get('googleDriveConnected') === 'true') {
+      toast.success('Google Drive connected successfully!')
+      loadProfile()
+      // Clean up URL
+      window.history.replaceState({}, document.title, '/account')
+    } else if (urlParams.get('googleDriveError') === 'true') {
+      toast.error('Failed to connect Google Drive. Please try again.')
+      window.history.replaceState({}, document.title, '/account')
+    }
+  }, [])
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -402,6 +482,127 @@ export function Account() {
                   <p className="mt-1 text-xs text-gray-500">Email address where daily schedule will be sent</p>
                 </div>
               </>
+            )}
+          </div>
+
+          {/* File Storage Settings Section */}
+          <div className="border-t border-gray-200 pt-6">
+            <h3 className="text-md font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <HardDrive className="w-5 h-5" />
+              File Storage
+            </h3>
+            <p className="text-sm text-gray-500 mb-4">Choose where to store files (lesson notes, homework, etc.).</p>
+            
+            {/* Storage Type Selection */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Storage Location
+              </label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-3 p-3 border border-gray-300 rounded-md cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="fileStorageType"
+                    value="local"
+                    checked={profile.fileStorageType === 'local'}
+                    onChange={(e) => setProfile({ ...profile, fileStorageType: e.target.value })}
+                    className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                  />
+                  <HardDrive className="w-5 h-5 text-gray-400" />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-gray-700">Local Storage</div>
+                    <div className="text-xs text-gray-500">Files stored on server (works locally, not on Vercel)</div>
+                  </div>
+                </label>
+                
+                <label className="flex items-center gap-3 p-3 border border-gray-300 rounded-md cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="fileStorageType"
+                    value="googleDrive"
+                    checked={profile.fileStorageType === 'googleDrive'}
+                    onChange={(e) => setProfile({ ...profile, fileStorageType: e.target.value })}
+                    className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
+                  />
+                  <Cloud className="w-5 h-5 text-gray-400" />
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-gray-700">Google Drive</div>
+                    <div className="text-xs text-gray-500">Files stored in your Google Drive (works everywhere)</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Google Drive Connection */}
+            {profile.fileStorageType === 'googleDrive' && (
+              <div className="mt-4 p-4 bg-gray-50 rounded-md">
+                {googleDriveConnected ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-green-600">
+                      <CheckCircle className="w-5 h-5" />
+                      <span className="text-sm font-medium">Google Drive Connected</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleTestGoogleDrive}
+                        disabled={testingConnection}
+                        className="px-3 py-1.5 text-sm font-medium text-indigo-600 bg-white border border-indigo-600 rounded-md hover:bg-indigo-50 disabled:opacity-50"
+                      >
+                        {testingConnection ? 'Testing...' : 'Test Connection'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDisconnectGoogleDrive}
+                        className="px-3 py-1.5 text-sm font-medium text-red-600 bg-white border border-red-600 rounded-md hover:bg-red-50"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Files will be stored in your Google Drive. You can optionally specify a folder ID below to store files in a specific folder.
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Google Drive Folder ID (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={profile.googleDriveFolderId || ''}
+                        onChange={(e) => setProfile({ ...profile, googleDriveFolderId: e.target.value })}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="Leave empty to use root folder"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        If specified, all files will be stored in this folder. Leave empty to use your Drive root.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2 text-amber-600">
+                      <AlertCircle className="w-5 h-5" />
+                      <span className="text-sm font-medium">Google Drive Not Connected</span>
+                    </div>
+                    <p className="text-sm text-gray-600">
+                      Connect your Google Drive account to store files in the cloud. You'll be asked to grant permissions to access your Drive.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleConnectGoogleDrive}
+                      disabled={connectingGoogleDrive}
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {connectingGoogleDrive ? 'Connecting...' : 'Connect Google Drive'}
+                    </button>
+                    {connectingGoogleDrive && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        You will be redirected to Google to sign in with your Google account.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             )}
           </div>
 

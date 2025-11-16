@@ -11,70 +11,76 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String
-  companyName String?
-  phone       String?
-  address     String?
-  logoUrl     String?
-  venmo       String?
-  zelle       String?
-  verified    Boolean  @default(false)
-  verificationToken String?
+  id                       String    @id @default(uuid())
+  email                    String    @unique
+  password                 String
+  name                     String
+  companyName              String?
+  phone                    String?
+  address                  String?
+  logoUrl                  String?
+  venmo                    String?
+  zelle                    String?
+  verified                 Boolean   @default(false)
+  verificationToken        String?
   verificationTokenExpires DateTime?
   // Automatic email settings
-  autoEmailEnabled Boolean @default(false)
-  autoEmailTime    String?  // Time in HH:MM format (24-hour)
-  autoEmailAddress String?  // Email address to send schedule to
-  deleted          Boolean  @default(false)  // Soft delete flag
-  deletedAt        DateTime? // Timestamp when account was deleted
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  students  Student[]
-  lessons   Lesson[]
-  payments  Payment[]
-  packages  Package[]
+  autoEmailEnabled         Boolean   @default(false)
+  autoEmailTime            String? // Time in HH:MM format (24-hour)
+  autoEmailAddress         String? // Email address to send schedule to
+  // File storage settings
+  fileStorageType          String?   @default("local") // "local" or "googleDrive"
+  googleDriveAccessToken   String? // OAuth access token for Google Drive
+  googleDriveRefreshToken  String? // OAuth refresh token for Google Drive
+  googleDriveTokenExpiry   DateTime? // When the access token expires
+  googleDriveFolderId      String? // Optional: specific folder ID to store files in
+  deleted                  Boolean   @default(false) // Soft delete flag
+  deletedAt                DateTime? // Timestamp when account was deleted
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+  students                 Student[]
+  lessons                  Lesson[]
+  payments                 Payment[]
+  packages                 Package[]
 }
 
 model Student {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Student Details
-  firstName   String
-  lastName    String
-  dateOfBirth DateTime?
-  email       String?
-  phone       String?
-  address     String?
-  schoolName  String?
-  grade       String?
-  subject     String?
-  difficulties String?  // Learning difficulties or areas of struggle
-  pricePerLesson Float?  // Price per individual lesson
+  firstName       String
+  lastName        String
+  dateOfBirth     DateTime?
+  email           String?
+  phone           String?
+  address         String?
+  schoolName      String?
+  grade           String?
+  subject         String?
+  difficulties    String? // Learning difficulties or areas of struggle
+  pricePerLesson  Float? // Price per individual lesson
   pricePerPackage Float? // Price per package of 10 lessons
-  usePackages   Boolean @default(false) // Whether this student uses packages
-  credit       Float    @default(0) // Credit balance for student account
-  
+  usePackages     Boolean   @default(false) // Whether this student uses packages
+  credit          Float     @default(0) // Credit balance for student account
+
   // Parent Details
   parentFullName String?
-  parentAddress  String?  // If different from student
+  parentAddress  String? // If different from student
   parentPhone    String?
   parentEmail    String?
-  
+
   // Emergency Contact (if different from parent)
   emergencyContactInfo String?
-  
-  notes       String?
-  archived    Boolean  @default(false)
-  familyId    String?  // Groups students from the same family for combined finances/reports
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  lessons     Lesson[]
-  packages    Package[]
-  payments    Payment[]
+
+  notes     String?
+  archived  Boolean   @default(false)
+  familyId  String? // Groups students from the same family for combined finances/reports
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  lessons   Lesson[]
+  packages  Package[]
+  payments  Payment[]
 
   @@index([userId])
   @@index([firstName, lastName])
@@ -82,33 +88,36 @@ model Student {
 }
 
 model Lesson {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  studentId String
-  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  packageId String?  // Link to package if this lesson was paid with a package
-  package   Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  dateTime  DateTime
-  duration  Int      // in minutes
-  subject   String
-  notes     String?
-  price     Float    // individual lesson price
-  isPaid    Boolean  @default(false)  // Track if lesson has been fully paid
-  paidAmount Float   @default(0)      // Amount paid towards this lesson (for partial payments)
-  locationType String  @default("in-person") // remote, in-person
-  link      String?  // Video call link for remote lessons
-  isRecurring Boolean @default(false)
+  id                 String    @id @default(uuid())
+  userId             String
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentId          String
+  student            Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  packageId          String? // Link to package if this lesson was paid with a package
+  package            Package?  @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  dateTime           DateTime
+  duration           Int // in minutes
+  subject            String
+  notes              String? // Lesson Notes - general notes about the lesson (shown in Calendar/Lessons pages)
+  academicNotes      String? // Academic Notes - detailed academic notes per lesson (shown in Extended Info)
+  notesFiles         String? // JSON array of file metadata for academic notes: [{fileName, filePath/fileId, storageType, ...}]
+  homeworkFiles      String? // JSON array of file metadata: [{fileName, filePath/fileId, storageType, ...}]
+  price              Float // individual lesson price
+  isPaid             Boolean   @default(false) // Track if lesson has been fully paid
+  paidAmount         Float     @default(0) // Amount paid towards this lesson (for partial payments)
+  locationType       String    @default("in-person") // remote, in-person
+  link               String? // Video call link for remote lessons
+  isRecurring        Boolean   @default(false)
   recurringFrequency String? // daily, weekly, monthly, yearly
-  recurringEndDate DateTime?
-  recurringGroupId String? // Groups recurring lessons together
+  recurringEndDate   DateTime?
+  recurringGroupId   String? // Groups recurring lessons together
   // iCal-style options
-  allDay    Boolean @default(false) // All-day event
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
+  allDay             Boolean   @default(false) // All-day event
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
   // Many-to-many relationship with payments
-  payments  LessonPayment[]
+  payments LessonPayment[]
 
   @@index([userId])
   @@index([studentId])
@@ -118,47 +127,47 @@ model Lesson {
 }
 
 model Package {
-  id          String   @id @default(uuid())
+  id          String    @id @default(uuid())
   userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   studentId   String
-  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  paymentId   String?  @unique // Link to the payment that created this package
-  payment     Payment? @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  student     Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  paymentId   String?   @unique // Link to the payment that created this package
+  payment     Payment?  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
   name        String
-  totalHours  Float    // Total hours in the package
-  hoursUsed   Float    @default(0)  // Hours consumed from the package
+  totalHours  Float // Total hours in the package
+  hoursUsed   Float     @default(0) // Hours consumed from the package
   price       Float
-  purchasedAt DateTime @default(now())
+  purchasedAt DateTime  @default(now())
   expiresAt   DateTime?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  lessons    Lesson[] // Lessons paid with this package
-  
+  lessons Lesson[] // Lessons paid with this package
+
   @@index([userId])
   @@index([studentId])
 }
 
 model Payment {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  studentId   String   // Primary student (for reference and backwards compatibility)
-  student     Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  familyId    String?  // If set, this payment applies to the whole family
-  packageId   String?  @unique // Link to package if this payment is for a package
-  package     Package? @relation
-  amount      Float
-  date        DateTime @default(now())
-  method      String   // cash, card, bank_transfer
-  notes       String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentId String // Primary student (for reference and backwards compatibility)
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  familyId  String? // If set, this payment applies to the whole family
+  packageId String?  @unique // Link to package if this payment is for a package
+  package   Package? @relation
+  amount    Float
+  date      DateTime @default(now())
+  method    String // cash, card, bank_transfer
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Many-to-many relationship with lessons
-  lessons     LessonPayment[]
+  lessons LessonPayment[]
 
   @@index([userId])
   @@index([studentId])
@@ -173,7 +182,7 @@ model LessonPayment {
   lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
   paymentId String
   payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  amount    Float    // Amount from this payment that goes to this lesson
+  amount    Float // Amount from this payment that goes to this lesson
   createdAt DateTime @default(now())
 
   @@unique([lessonId, paymentId])
@@ -182,10 +191,9 @@ model LessonPayment {
 }
 
 model Settings {
-  id         String   @id @default(uuid())
-  key        String   @unique
-  value      String
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
-
