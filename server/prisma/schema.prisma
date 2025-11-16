@@ -42,6 +42,7 @@ model User {
   lessons                  Lesson[]
   payments                 Payment[]
   packages                 Package[]
+  purchases                Purchase[]
 }
 
 model Student {
@@ -188,6 +189,30 @@ model LessonPayment {
   @@unique([lessonId, paymentId])
   @@index([lessonId])
   @@index([paymentId])
+}
+
+model Purchase {
+  id                 String   @id @default(uuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date               DateTime
+  description        String
+  amount             Float
+  category           String? // e.g., "Supplies", "Equipment", "Software", "Travel", "Other"
+  vendor             String? // Vendor/supplier name
+  paymentMethod      String? // "venmo", "zelle", "credit_card"
+  notes              String?
+  isRecurring        Boolean  @default(false)
+  recurringFrequency String? // "daily", "weekly", "monthly", "yearly"
+  recurringEndDate   DateTime?
+  recurringGroupId   String? // Groups recurring purchases together
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId])
+  @@index([date])
+  @@index([category])
+  @@index([recurringGroupId])
 }
 
 model Settings {
