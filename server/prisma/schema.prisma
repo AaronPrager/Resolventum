@@ -205,6 +205,7 @@ model Purchase {
   vendor             String? // Vendor/supplier name
   paymentMethod      String? // "venmo", "zelle", "credit_card"
   notes              String?
+  receiptFiles       String? // JSON array of receipt file metadata
   isRecurring        Boolean  @default(false)
   recurringFrequency String? // "daily", "weekly", "monthly", "yearly"
   recurringEndDate   DateTime?

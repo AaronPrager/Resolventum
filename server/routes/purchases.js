@@ -3,8 +3,47 @@ import { body, validationResult } from 'express-validator';
 import { authenticateToken } from '../middleware/auth.js';
 import prisma from '../prisma/client.js';
 import { v4 as uuidv4 } from 'uuid';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 const router = express.Router();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Create uploads directory for purchase receipts
+const purchaseUploadsDir = path.join(__dirname, '../uploads/purchases');
+if (!fs.existsSync(purchaseUploadsDir)) {
+  fs.mkdirSync(purchaseUploadsDir, { recursive: true });
+}
+
+// Configure multer for purchase receipt uploads
+const purchaseFileStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const purchaseId = req.params.id || 'temp';
+    const purchaseDir = path.join(purchaseUploadsDir, purchaseId);
+    if (!fs.existsSync(purchaseDir)) {
+      fs.mkdirSync(purchaseDir, { recursive: true });
+    }
+    cb(null, purchaseDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename: timestamp-originalname
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const name = path.basename(file.originalname, ext);
+    cb(null, `${uniqueSuffix}-${name}${ext}`);
+  }
+});
+
+const uploadPurchaseReceipt = multer({
+  storage: purchaseFileStorage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit per file
+  }
+});
 
 // Helper function to calculate recurring purchase dates
 function calculateRecurringDates(startDate, frequency, endDate) {
@@ -439,7 +478,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Create purchase
-router.post('/', [
+router.post('/', uploadPurchaseReceipt.single('receipt'), [
   body('date').isISO8601().withMessage('Valid date is required'),
   body('description').trim().notEmpty().withMessage('Description is required'),
   body('amount').isFloat({ min: 0 }).withMessage('Valid amount is required'),
@@ -453,8 +492,9 @@ router.post('/', [
     return ['daily', 'weekly', 'monthly', 'yearly'].includes(value);
   }).withMessage('Invalid recurring frequency'),
   body('recurringEndDate').optional({ values: 'falsy' }).custom((value, { req }) => {
-    // Only validate if isRecurring is true
-    if (req.body.isRecurring === true) {
+    // Only validate if isRecurring is true (handle both boolean and string)
+    const isRecurring = req.body.isRecurring === true || req.body.isRecurring === 'true';
+    if (isRecurring) {
       if (!value || value === '') return false; // Required when recurring
       // Validate ISO8601 format
       const iso8601Regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/;
@@ -475,8 +515,11 @@ router.post('/', [
 
     const { date, description, amount, category, vendor, paymentMethod, notes, isRecurring, recurringFrequency, recurringEndDate } = req.body;
 
+    // Convert isRecurring to boolean if it's a string (from FormData)
+    const isRecurringBool = isRecurring === true || isRecurring === 'true';
+
     // Validate recurring purchase requirements
-    if (isRecurring && (!recurringFrequency || !recurringEndDate)) {
+    if (isRecurringBool && (!recurringFrequency || !recurringEndDate)) {
       return res.status(400).json({ 
         message: 'Recurring purchases require both frequency and end date' 
       });
@@ -485,8 +528,75 @@ router.post('/', [
     // Assign "Unassigned" category if not provided
     const finalCategory = category && category.trim() ? category.trim() : 'Unassigned';
 
+    // Get user's file storage preference
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { 
+        fileStorageType: true,
+        googleDriveAccessToken: true 
+      }
+    });
+
+    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
+    
+    // Handle receipt file upload
+    let receiptFilesMetadata = [];
+    if (req.file) {
+      if (useGoogleDrive) {
+        // Upload to Google Drive
+        const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
+        const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
+
+        try {
+          const fileBuffer = fs.readFileSync(req.file.path);
+          const result = await uploadFileToDrive(
+            req.user.id,
+            fileBuffer,
+            req.file.originalname,
+            req.file.mimetype,
+            purchasesFolder.folderId
+          );
+          
+          receiptFilesMetadata.push({
+            fileName: req.file.originalname,
+            fileId: result.fileId,
+            webViewLink: result.webViewLink,
+            storageType: 'googleDrive',
+            uploadedAt: new Date().toISOString()
+          });
+          
+          // Clean up local temp file
+          fs.unlinkSync(req.file.path);
+          console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
+        } catch (error) {
+          console.error('Error uploading receipt to Google Drive:', error);
+          // Fallback to local storage
+          const tempPurchaseId = 'temp';
+          const relativePath = `/uploads/purchases/${tempPurchaseId}/${req.file.filename}`;
+          receiptFilesMetadata.push({
+            fileName: req.file.originalname,
+            filePath: relativePath,
+            storageType: 'local',
+            uploadedAt: new Date().toISOString()
+          });
+        }
+      } else {
+        // Local storage - file already saved by multer
+        const tempPurchaseId = 'temp';
+        const relativePath = `/uploads/purchases/${tempPurchaseId}/${req.file.filename}`;
+        receiptFilesMetadata.push({
+          fileName: req.file.originalname,
+          filePath: relativePath,
+          storageType: 'local',
+          uploadedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    const receiptFilesJson = receiptFilesMetadata.length > 0 ? JSON.stringify(receiptFilesMetadata) : null;
+
     // If recurring, create multiple purchases
-    if (isRecurring && recurringFrequency && recurringEndDate) {
+    if (isRecurringBool && recurringFrequency && recurringEndDate) {
       const recurringGroupId = uuidv4();
       const startDate = new Date(date);
       const endDate = new Date(recurringEndDate);
@@ -494,7 +604,7 @@ router.post('/', [
 
       const dates = calculateRecurringDates(startDate, recurringFrequency, endDate);
 
-      const purchasesData = dates.map(purchaseDate => ({
+      const purchasesData = dates.map((purchaseDate, index) => ({
         userId: req.user.id,
         date: purchaseDate,
         description,
@@ -503,6 +613,7 @@ router.post('/', [
         vendor: vendor || null,
         paymentMethod: paymentMethod || null,
         notes: notes || null,
+        receiptFiles: index === 0 ? receiptFilesJson : null, // Only attach receipt to first purchase
         isRecurring: true,
         recurringFrequency,
         recurringEndDate: endDate,
@@ -512,6 +623,31 @@ router.post('/', [
       const purchases = await prisma.purchase.createMany({
         data: purchasesData,
       });
+
+      // If using local storage and receipt was uploaded, move file to first purchase's folder
+      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
+        const firstPurchase = await prisma.purchase.findFirst({
+          where: { recurringGroupId },
+          orderBy: { date: 'asc' }
+        });
+        if (firstPurchase && req.file.path && fs.existsSync(req.file.path)) {
+          const oldPath = req.file.path;
+          const newDir = path.join(purchaseUploadsDir, firstPurchase.id);
+          if (!fs.existsSync(newDir)) {
+            fs.mkdirSync(newDir, { recursive: true });
+          }
+          const newPath = path.join(newDir, req.file.filename);
+          if (fs.existsSync(oldPath)) {
+            fs.renameSync(oldPath, newPath);
+            // Update file path in metadata
+            receiptFilesMetadata[0].filePath = `/uploads/purchases/${firstPurchase.id}/${req.file.filename}`;
+            await prisma.purchase.update({
+              where: { id: firstPurchase.id },
+              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
+            });
+          }
+        }
+      }
 
       // Update frequent vendors if vendor is provided
       if (vendor && vendor.trim()) {
@@ -540,23 +676,52 @@ router.post('/', [
           vendor: vendor || null,
           paymentMethod: paymentMethod || null,
           notes: notes || null,
-          isRecurring: isRecurring || false,
+          receiptFiles: receiptFilesJson,
+          isRecurring: isRecurringBool || false,
           recurringFrequency: recurringFrequency || null,
           recurringEndDate: recurringEndDate ? new Date(recurringEndDate) : null,
           recurringGroupId: null,
         },
       });
 
-      // Update frequent vendors if vendor is provided
-      if (vendor && vendor.trim()) {
-        await updateFrequentVendors(req.user.id, vendor.trim());
+      // If using local storage and receipt was uploaded, move file to purchase's folder
+      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
+        if (req.file.path && fs.existsSync(req.file.path)) {
+          const oldPath = req.file.path;
+          const newDir = path.join(purchaseUploadsDir, purchase.id);
+          if (!fs.existsSync(newDir)) {
+            fs.mkdirSync(newDir, { recursive: true });
+          }
+          const newPath = path.join(newDir, req.file.filename);
+          if (fs.existsSync(oldPath)) {
+            fs.renameSync(oldPath, newPath);
+            // Update file path in metadata
+            receiptFilesMetadata[0].filePath = `/uploads/purchases/${purchase.id}/${req.file.filename}`;
+            await prisma.purchase.update({
+              where: { id: purchase.id },
+              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
+            });
+          }
+        }
       }
 
+      // Update frequent vendors if vendor is provided (non-blocking)
+      if (vendor && vendor.trim()) {
+        updateFrequentVendors(req.user.id, vendor.trim()).catch(err => {
+          console.error('Error updating frequent vendors (non-critical):', err);
+        });
+      }
+
+      // Return the purchase (receiptFiles is already stored as JSON string)
       return res.status(201).json(purchase);
     }
   } catch (error) {
     console.error('Create purchase error:', error);
-    res.status(500).json({ message: 'Error creating purchase' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Error creating purchase',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
@@ -589,13 +754,12 @@ async function updateFrequentVendors(userId, vendorName) {
 }
 
 // Update purchase
-router.put('/:id', [
+router.put('/:id', uploadPurchaseReceipt.single('receipt'), [
   body('date').optional().isISO8601().withMessage('Valid date is required'),
   body('description').optional().trim().notEmpty().withMessage('Description cannot be empty'),
   body('amount').optional().isFloat({ min: 0 }).withMessage('Valid amount is required'),
   body('category').optional().trim(),
   body('vendor').optional().trim(),
-  body('receiptUrl').optional().trim(),
   body('paymentMethod').optional({ values: 'falsy' }).trim(),
   body('notes').optional().trim(),
 ], async (req, res) => {
@@ -617,13 +781,334 @@ router.put('/:id', [
       return res.status(404).json({ message: 'Purchase not found' });
     }
 
-    const { date, description, amount, category, vendor, paymentMethod, notes, isRecurring, recurringFrequency } = req.body;
+    const { date, description, amount, category, vendor, paymentMethod, notes, isRecurring, recurringFrequency, recurringEndDate } = req.body;
+
+    // Convert isRecurring to boolean if it's a string (from FormData)
+    const isRecurringBool = isRecurring !== undefined 
+      ? (isRecurring === true || isRecurring === 'true')
+      : undefined;
+    
+    // Check if changing from non-recurring to recurring
+    const wasNonRecurring = !existingPurchase.isRecurring;
+    const isChangingToRecurring = wasNonRecurring && isRecurringBool === true;
+    
+    // Check if updating recurring end date for an existing recurring purchase
+    const isUpdatingRecurringEndDate = existingPurchase.isRecurring && 
+                                       existingPurchase.recurringGroupId &&
+                                       recurringEndDate !== undefined &&
+                                       recurringEndDate !== null;
+    
+    // Check if end date actually changed
+    let endDateChanged = false;
+    if (isUpdatingRecurringEndDate) {
+      const existingEndDate = existingPurchase.recurringEndDate 
+        ? new Date(existingPurchase.recurringEndDate).toISOString().split('T')[0]
+        : null;
+      const newEndDate = new Date(recurringEndDate).toISOString().split('T')[0];
+      endDateChanged = existingEndDate !== newEndDate;
+    }
 
     // Assign "Unassigned" category if not provided or empty
     const finalCategory = category !== undefined 
       ? (category && category.trim() ? category.trim() : 'Unassigned')
       : undefined;
 
+    // Get user's file storage preference
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { 
+        fileStorageType: true,
+        googleDriveAccessToken: true 
+      }
+    });
+
+    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
+
+    // Handle receipt file upload
+    let receiptFilesMetadata = existingPurchase.receiptFiles ? JSON.parse(existingPurchase.receiptFiles) : [];
+    if (req.file) {
+      if (useGoogleDrive) {
+        // Upload to Google Drive
+        const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
+        const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
+
+        try {
+          const fileBuffer = fs.readFileSync(req.file.path);
+          const result = await uploadFileToDrive(
+            req.user.id,
+            fileBuffer,
+            req.file.originalname,
+            req.file.mimetype,
+            purchasesFolder.folderId
+          );
+          
+          receiptFilesMetadata.push({
+            fileName: req.file.originalname,
+            fileId: result.fileId,
+            webViewLink: result.webViewLink,
+            storageType: 'googleDrive',
+            uploadedAt: new Date().toISOString()
+          });
+          
+          // Clean up local temp file
+          fs.unlinkSync(req.file.path);
+          console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
+        } catch (error) {
+          console.error('Error uploading receipt to Google Drive:', error);
+          // Fallback to local storage
+          const relativePath = `/uploads/purchases/${req.params.id}/${req.file.filename}`;
+          receiptFilesMetadata.push({
+            fileName: req.file.originalname,
+            filePath: relativePath,
+            storageType: 'local',
+            uploadedAt: new Date().toISOString()
+          });
+        }
+      } else {
+        // Local storage - move file to purchase's folder
+        const oldPath = req.file.path;
+        const newDir = path.join(purchaseUploadsDir, req.params.id);
+        if (!fs.existsSync(newDir)) {
+          fs.mkdirSync(newDir, { recursive: true });
+        }
+        const newPath = path.join(newDir, req.file.filename);
+        if (fs.existsSync(oldPath)) {
+          fs.renameSync(oldPath, newPath);
+        }
+        const relativePath = `/uploads/purchases/${req.params.id}/${req.file.filename}`;
+        receiptFilesMetadata.push({
+          fileName: req.file.originalname,
+          filePath: relativePath,
+          storageType: 'local',
+          uploadedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    // If changing from non-recurring to recurring, create multiple purchases
+    if (isChangingToRecurring && recurringFrequency && recurringEndDate) {
+      // Validate recurring purchase requirements
+      if (!recurringFrequency || !recurringEndDate) {
+        return res.status(400).json({
+          message: 'Recurring purchases require both frequency and end date'
+        });
+      }
+
+      // Get values to use (from update or existing purchase)
+      const purchaseDate = date !== undefined ? new Date(date) : existingPurchase.date;
+      const purchaseDescription = description !== undefined ? description : existingPurchase.description;
+      const purchaseAmount = amount !== undefined ? parseFloat(amount) : existingPurchase.amount;
+      const purchaseCategory = finalCategory !== undefined ? finalCategory : (existingPurchase.category || 'Unassigned');
+      const purchaseVendor = vendor !== undefined ? (vendor || null) : existingPurchase.vendor;
+      const purchasePaymentMethod = paymentMethod !== undefined ? (paymentMethod || null) : existingPurchase.paymentMethod;
+      const purchaseNotes = notes !== undefined ? (notes || null) : existingPurchase.notes;
+
+      const recurringGroupId = uuidv4();
+      const startDate = purchaseDate;
+      const endDate = new Date(recurringEndDate);
+      endDate.setHours(23, 59, 59, 999);
+
+      const dates = calculateRecurringDates(startDate, recurringFrequency, endDate);
+
+      // Preserve existing receipt files if no new file was uploaded
+      if (!req.file && existingPurchase.receiptFiles) {
+        receiptFilesMetadata = JSON.parse(existingPurchase.receiptFiles);
+      }
+      
+      const receiptFilesJson = receiptFilesMetadata.length > 0 ? JSON.stringify(receiptFilesMetadata) : null;
+
+      const purchasesData = dates.map((purchaseDateItem, index) => ({
+        userId: req.user.id,
+        date: purchaseDateItem,
+        description: purchaseDescription,
+        amount: purchaseAmount,
+        category: purchaseCategory,
+        vendor: purchaseVendor,
+        paymentMethod: purchasePaymentMethod,
+        notes: purchaseNotes,
+        receiptFiles: index === 0 ? receiptFilesJson : null, // Only attach receipt to first purchase
+        isRecurring: true,
+        recurringFrequency,
+        recurringEndDate: endDate,
+        recurringGroupId,
+      }));
+
+      // Delete the original purchase
+      await prisma.purchase.delete({
+        where: { id: req.params.id }
+      });
+
+      // Create multiple purchases
+      const purchases = await prisma.purchase.createMany({
+        data: purchasesData,
+      });
+
+      // If using local storage and receipt was uploaded, move file to first purchase's folder
+      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
+        const firstPurchase = await prisma.purchase.findFirst({
+          where: { recurringGroupId },
+          orderBy: { date: 'asc' }
+        });
+        if (firstPurchase && req.file.path && fs.existsSync(req.file.path)) {
+          const oldPath = req.file.path;
+          const newDir = path.join(purchaseUploadsDir, firstPurchase.id);
+          if (!fs.existsSync(newDir)) {
+            fs.mkdirSync(newDir, { recursive: true });
+          }
+          const newPath = path.join(newDir, req.file.filename);
+          if (fs.existsSync(oldPath)) {
+            fs.renameSync(oldPath, newPath);
+            // Update file path in metadata
+            receiptFilesMetadata[0].filePath = `/uploads/purchases/${firstPurchase.id}/${req.file.filename}`;
+            await prisma.purchase.update({
+              where: { id: firstPurchase.id },
+              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
+            });
+          }
+        }
+      }
+
+      // Update frequent vendors if vendor is provided (non-blocking)
+      if (vendor !== undefined && vendor && vendor.trim()) {
+        updateFrequentVendors(req.user.id, vendor.trim()).catch(err => {
+          console.error('Error updating frequent vendors (non-critical):', err);
+        });
+      }
+
+      // Fetch the created purchases to return
+      const createdPurchases = await prisma.purchase.findMany({
+        where: { recurringGroupId },
+        orderBy: { date: 'asc' },
+      });
+
+      return res.status(200).json({ 
+        message: `Created ${purchases.count} recurring purchases`,
+        purchases: createdPurchases 
+      });
+    }
+
+    // If updating recurring end date, delete all and recreate
+    if (isUpdatingRecurringEndDate && endDateChanged) {
+      // Get all purchases in the recurring group
+      const allGroupPurchases = await prisma.purchase.findMany({
+        where: { 
+          recurringGroupId: existingPurchase.recurringGroupId,
+          userId: req.user.id
+        },
+        orderBy: { date: 'asc' }
+      });
+
+      if (allGroupPurchases.length === 0) {
+        return res.status(404).json({ message: 'Recurring purchase group not found' });
+      }
+
+      // Get the first purchase to preserve receipt files and other data
+      const firstPurchase = allGroupPurchases[0];
+
+      // Get values to use (from update or existing purchase)
+      const purchaseDate = date !== undefined ? new Date(date) : firstPurchase.date;
+      const purchaseDescription = description !== undefined ? description : firstPurchase.description;
+      const purchaseAmount = amount !== undefined ? parseFloat(amount) : firstPurchase.amount;
+      const purchaseCategory = finalCategory !== undefined ? finalCategory : (firstPurchase.category || 'Unassigned');
+      const purchaseVendor = vendor !== undefined ? (vendor || null) : firstPurchase.vendor;
+      const purchasePaymentMethod = paymentMethod !== undefined ? (paymentMethod || null) : firstPurchase.paymentMethod;
+      const purchaseNotes = notes !== undefined ? (notes || null) : firstPurchase.notes;
+      const purchaseFrequency = recurringFrequency !== undefined ? recurringFrequency : firstPurchase.recurringFrequency;
+
+      if (!purchaseFrequency) {
+        return res.status(400).json({
+          message: 'Recurring frequency is required'
+        });
+      }
+
+      const startDate = purchaseDate;
+      const endDate = new Date(recurringEndDate);
+      endDate.setHours(23, 59, 59, 999);
+
+      const dates = calculateRecurringDates(startDate, purchaseFrequency, endDate);
+
+      // Preserve receipt files from first purchase if no new file was uploaded
+      let receiptFilesToUse = null;
+      if (!req.file && firstPurchase.receiptFiles) {
+        receiptFilesToUse = firstPurchase.receiptFiles;
+      } else if (receiptFilesMetadata.length > 0) {
+        receiptFilesToUse = JSON.stringify(receiptFilesMetadata);
+      }
+
+      const purchasesData = dates.map((purchaseDateItem, index) => ({
+        userId: req.user.id,
+        date: purchaseDateItem,
+        description: purchaseDescription,
+        amount: purchaseAmount,
+        category: purchaseCategory,
+        vendor: purchaseVendor,
+        paymentMethod: purchasePaymentMethod,
+        notes: purchaseNotes,
+        receiptFiles: index === 0 ? receiptFilesToUse : null, // Only attach receipt to first purchase
+        isRecurring: true,
+        recurringFrequency: purchaseFrequency,
+        recurringEndDate: endDate,
+        recurringGroupId: existingPurchase.recurringGroupId, // Keep same group ID
+      }));
+
+      // Delete all purchases in the group
+      await prisma.purchase.deleteMany({
+        where: { 
+          recurringGroupId: existingPurchase.recurringGroupId,
+          userId: req.user.id
+        }
+      });
+
+      // Create new purchases with updated end date
+      const purchases = await prisma.purchase.createMany({
+        data: purchasesData,
+      });
+
+      // If using local storage and receipt was uploaded, move file to first purchase's folder
+      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
+        const newFirstPurchase = await prisma.purchase.findFirst({
+          where: { recurringGroupId: existingPurchase.recurringGroupId },
+          orderBy: { date: 'asc' }
+        });
+        if (newFirstPurchase && req.file.path && fs.existsSync(req.file.path)) {
+          const oldPath = req.file.path;
+          const newDir = path.join(purchaseUploadsDir, newFirstPurchase.id);
+          if (!fs.existsSync(newDir)) {
+            fs.mkdirSync(newDir, { recursive: true });
+          }
+          const newPath = path.join(newDir, req.file.filename);
+          if (fs.existsSync(oldPath)) {
+            fs.renameSync(oldPath, newPath);
+            // Update file path in metadata
+            receiptFilesMetadata[0].filePath = `/uploads/purchases/${newFirstPurchase.id}/${req.file.filename}`;
+            await prisma.purchase.update({
+              where: { id: newFirstPurchase.id },
+              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
+            });
+          }
+        }
+      }
+
+      // Update frequent vendors if vendor is provided (non-blocking)
+      if (vendor !== undefined && vendor && vendor.trim()) {
+        updateFrequentVendors(req.user.id, vendor.trim()).catch(err => {
+          console.error('Error updating frequent vendors (non-critical):', err);
+        });
+      }
+
+      // Fetch the created purchases to return
+      const createdPurchases = await prisma.purchase.findMany({
+        where: { recurringGroupId: existingPurchase.recurringGroupId },
+        orderBy: { date: 'asc' },
+      });
+
+      return res.status(200).json({ 
+        message: `Updated recurring purchases: ${purchases.count} purchases created`,
+        purchases: createdPurchases 
+      });
+    }
+
+    // Regular update (not changing to recurring or end date)
     const updateData = {};
     if (date !== undefined) updateData.date = new Date(date);
     if (description !== undefined) updateData.description = description;
@@ -632,23 +1117,113 @@ router.put('/:id', [
     if (vendor !== undefined) updateData.vendor = vendor || null;
     if (paymentMethod !== undefined) updateData.paymentMethod = paymentMethod || null;
     if (notes !== undefined) updateData.notes = notes || null;
-    if (isRecurring !== undefined) updateData.isRecurring = isRecurring;
+    if (isRecurringBool !== undefined) updateData.isRecurring = isRecurringBool;
     if (recurringFrequency !== undefined) updateData.recurringFrequency = recurringFrequency || null;
+    if (recurringEndDate !== undefined) updateData.recurringEndDate = recurringEndDate ? new Date(recurringEndDate) : null;
+    if (req.file) updateData.receiptFiles = JSON.stringify(receiptFilesMetadata);
 
     const purchase = await prisma.purchase.update({
       where: { id: req.params.id },
       data: updateData,
     });
 
-    // Update frequent vendors if vendor is provided
+    // Update frequent vendors if vendor is provided (non-blocking)
     if (vendor !== undefined && vendor && vendor.trim()) {
-      await updateFrequentVendors(req.user.id, vendor.trim());
+      updateFrequentVendors(req.user.id, vendor.trim()).catch(err => {
+        console.error('Error updating frequent vendors (non-critical):', err);
+      });
     }
 
-    res.json(purchase);
+    return res.status(200).json(purchase);
   } catch (error) {
     console.error('Update purchase error:', error);
-    res.status(500).json({ message: 'Error updating purchase' });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      message: 'Error updating purchase',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Delete receipt file from purchase
+router.delete('/:id/receipts', authenticateToken, async (req, res) => {
+  try {
+    const { fileIndex } = req.query;
+    
+    if (fileIndex === undefined) {
+      return res.status(400).json({ message: 'File index is required' });
+    }
+
+    const purchase = await prisma.purchase.findFirst({
+      where: { 
+        id: req.params.id,
+        userId: req.user.id
+      }
+    });
+
+    if (!purchase) {
+      return res.status(404).json({ message: 'Purchase not found' });
+    }
+
+    if (!purchase.receiptFiles) {
+      return res.status(404).json({ message: 'No receipt files found' });
+    }
+
+    const receiptFiles = JSON.parse(purchase.receiptFiles);
+    const fileIndexNum = parseInt(fileIndex, 10);
+
+    if (isNaN(fileIndexNum) || fileIndexNum < 0 || fileIndexNum >= receiptFiles.length) {
+      return res.status(400).json({ message: 'Invalid file index' });
+    }
+
+    const fileToDelete = receiptFiles[fileIndexNum];
+
+    // Delete the file from storage
+    if (fileToDelete.storageType === 'googleDrive' && fileToDelete.fileId) {
+      try {
+        const { deleteFileFromDrive } = await import('../utils/googleDrive.js');
+        await deleteFileFromDrive(req.user.id, fileToDelete.fileId);
+        console.log(`Deleted Google Drive receipt: ${fileToDelete.fileName}`);
+      } catch (error) {
+        console.error('Error deleting Google Drive file:', error);
+        // Continue to remove from metadata even if deletion fails
+      }
+    } else if (fileToDelete.storageType === 'local' && fileToDelete.filePath) {
+      try {
+        // Extract the file path and delete from filesystem
+        const filePath = path.join(__dirname, '..', fileToDelete.filePath);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`Deleted local receipt: ${fileToDelete.fileName}`);
+        }
+      } catch (error) {
+        console.error('Error deleting local file:', error);
+        // Continue to remove from metadata even if deletion fails
+      }
+    }
+
+    // Remove the file from the metadata array
+    const updatedFiles = receiptFiles.filter((_, index) => index !== fileIndexNum);
+
+    // Update the purchase
+    const updateData = {
+      receiptFiles: updatedFiles.length > 0 ? JSON.stringify(updatedFiles) : null
+    };
+
+    await prisma.purchase.update({
+      where: { id: req.params.id },
+      data: updateData
+    });
+
+    // Fetch updated purchase
+    const updatedPurchase = await prisma.purchase.findUnique({
+      where: { id: req.params.id }
+    });
+
+    res.json(updatedPurchase);
+  } catch (error) {
+    console.error('Delete receipt error:', error);
+    res.status(500).json({ message: 'Error deleting receipt' });
   }
 });
 

@@ -199,6 +199,36 @@ export async function getOrCreateStudentFolder(userId, studentName) {
 }
 
 /**
+ * Get or create the "Purchases" folder in Google Drive
+ */
+export async function getOrCreatePurchasesFolder(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { googleDriveFolderId: true }
+  });
+
+  const drive = await getDriveClient(userId);
+  const baseFolderId = user?.googleDriveFolderId || 'root';
+  const folderName = 'Purchases';
+  
+  // Check if Purchases folder already exists
+  const response = await drive.files.list({
+    q: `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and '${baseFolderId}' in parents and trashed=false`,
+    fields: 'files(id, name)',
+  });
+
+  if (response.data.files && response.data.files.length > 0) {
+    return {
+      folderId: response.data.files[0].id,
+      folderName: response.data.files[0].name,
+    };
+  }
+
+  // Create Purchases folder
+  return await createFolderInDrive(userId, folderName, baseFolderId);
+}
+
+/**
  * Delete file from Google Drive
  */
 export async function deleteFileFromDrive(userId, fileId) {

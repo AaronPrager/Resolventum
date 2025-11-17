@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
-import { Plus, X, Trash2, Edit, Calendar as CalendarIcon, DollarSign, Tag, Building2, CreditCard, Repeat, Save, Settings } from 'lucide-react'
+import { Plus, X, Trash2, Edit, Calendar as CalendarIcon, DollarSign, Tag, Building2, CreditCard, Repeat, Save, Settings, Upload, File, Paperclip } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Purchases() {
@@ -45,6 +45,8 @@ export function Purchases() {
     recurringFrequency: '',
     recurringEndDate: ''
   })
+  const [receiptFile, setReceiptFile] = useState(null)
+  const [existingReceiptFiles, setExistingReceiptFiles] = useState([])
 
   const defaultCategories = ['Unassigned', 'Supplies', 'Equipment', 'Software', 'Travel', 'Marketing', 'Office', 'Other']
   const [frequentVendors, setFrequentVendors] = useState([])
@@ -244,6 +246,16 @@ export function Purchases() {
         recurringFrequency: purchase.recurringFrequency || '',
         recurringEndDate: purchase.recurringEndDate ? new Date(purchase.recurringEndDate).toISOString().split('T')[0] : ''
       })
+      // Parse existing receipt files
+      if (purchase.receiptFiles) {
+        try {
+          setExistingReceiptFiles(JSON.parse(purchase.receiptFiles))
+        } catch (e) {
+          setExistingReceiptFiles([])
+        }
+      } else {
+        setExistingReceiptFiles([])
+      }
     } else {
       setEditingPurchase(null)
       setFormData({
@@ -258,13 +270,17 @@ export function Purchases() {
         recurringFrequency: '',
         recurringEndDate: ''
       })
+      setExistingReceiptFiles([])
     }
+    setReceiptFile(null)
     setShowModal(true)
   }
 
   const handleCloseModal = () => {
     setShowModal(false)
     setEditingPurchase(null)
+    setReceiptFile(null)
+    setExistingReceiptFiles([])
     setFormData({
       date: new Date().toISOString().split('T')[0],
       description: '',
@@ -313,6 +329,7 @@ export function Purchases() {
     setIsSubmitting(true)
 
     try {
+      // Use FormData if there's a file, otherwise use regular JSON
       const submitData = {
         ...formData,
         amount: parseFloat(formData.amount),
@@ -322,15 +339,53 @@ export function Purchases() {
         paymentMethod: formData.paymentMethod && formData.paymentMethod.trim() ? formData.paymentMethod : null
       }
 
-      if (editingPurchase) {
-        await api.put(`/purchases/${editingPurchase.id}`, submitData)
-        toast.success('Purchase updated successfully')
-      } else {
-        const response = await api.post('/purchases', submitData)
-        if (response.data.purchases && response.data.purchases.length > 1) {
-          toast.success(`Created ${response.data.purchases.length} recurring purchases`)
+      if (receiptFile) {
+        // Use FormData for file upload
+        const formDataToSend = new FormData()
+        Object.keys(submitData).forEach(key => {
+          if (submitData[key] !== null && submitData[key] !== undefined) {
+            // Convert boolean to string for FormData
+            const value = typeof submitData[key] === 'boolean' ? String(submitData[key]) : submitData[key]
+            formDataToSend.append(key, value)
+          }
+        })
+        formDataToSend.append('receipt', receiptFile)
+
+        if (editingPurchase) {
+          const updateResponse = await api.put(`/purchases/${editingPurchase.id}`, formDataToSend, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          })
+          if (updateResponse.data.purchases && updateResponse.data.purchases.length > 1) {
+            toast.success(`Created ${updateResponse.data.purchases.length} recurring purchases`)
+          } else {
+            toast.success('Purchase updated successfully')
+          }
         } else {
-          toast.success('Purchase added successfully')
+          const response = await api.post('/purchases', formDataToSend, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          })
+          if (response.data.purchases && response.data.purchases.length > 1) {
+            toast.success(`Created ${response.data.purchases.length} recurring purchases`)
+          } else {
+            toast.success('Purchase added successfully')
+          }
+        }
+      } else {
+        // No file, use regular JSON
+        if (editingPurchase) {
+          const updateResponse = await api.put(`/purchases/${editingPurchase.id}`, submitData)
+          if (updateResponse.data.purchases && updateResponse.data.purchases.length > 1) {
+            toast.success(`Created ${updateResponse.data.purchases.length} recurring purchases`)
+          } else {
+            toast.success('Purchase updated successfully')
+          }
+        } else {
+          const response = await api.post('/purchases', submitData)
+          if (response.data.purchases && response.data.purchases.length > 1) {
+            toast.success(`Created ${response.data.purchases.length} recurring purchases`)
+          } else {
+            toast.success('Purchase added successfully')
+          }
         }
       }
       fetchPurchases()
@@ -579,6 +634,20 @@ export function Purchases() {
                         {purchase.notes && (
                           <div className="text-xs text-gray-500 mt-1 truncate">{purchase.notes}</div>
                         )}
+                        {purchase.receiptFiles && (() => {
+                          try {
+                            const files = JSON.parse(purchase.receiptFiles)
+                            if (files.length > 0) {
+                              return (
+                                <div className="flex items-center gap-1 mt-1 text-xs text-indigo-600">
+                                  <Paperclip className="h-3 w-3" />
+                                  <span>{files.length} receipt{files.length !== 1 ? 's' : ''}</span>
+                                </div>
+                              )
+                            }
+                          } catch (e) {}
+                          return null
+                        })()}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
@@ -827,6 +896,81 @@ export function Purchases() {
                       placeholder="Additional notes..."
                     />
                   </div>
+                  
+                  {/* Receipt Upload */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Receipt</label>
+                    <input
+                      type="file"
+                      onChange={(e) => setReceiptFile(e.target.files[0] || null)}
+                      accept="image/*,.pdf"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                    {receiptFile && (
+                      <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                        <File className="h-3 w-3" />
+                        Selected: {receiptFile.name}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Existing Receipt Files */}
+                  {existingReceiptFiles.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Existing Receipts</label>
+                      <div className="space-y-2">
+                        {existingReceiptFiles.map((file, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded border border-gray-200">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <Paperclip className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                              <span className="text-sm text-gray-700 truncate">{file.fileName}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {file.webViewLink && (
+                                <a
+                                  href={file.webViewLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-indigo-600 hover:text-indigo-800 text-xs"
+                                >
+                                  View
+                                </a>
+                              )}
+                              {file.filePath && (
+                                <a
+                                  href={file.filePath}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-indigo-600 hover:text-indigo-800 text-xs"
+                                >
+                                  View
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await api.delete(`/purchases/${editingPurchase.id}/receipts?fileIndex=${index}`)
+                                    const updated = existingReceiptFiles.filter((_, i) => i !== index)
+                                    setExistingReceiptFiles(updated)
+                                    toast.success('Receipt deleted successfully')
+                                    fetchPurchases()
+                                  } catch (error) {
+                                    toast.error('Failed to delete receipt')
+                                  }
+                                }}
+                                className="text-red-600 hover:text-red-800 p-1"
+                                title="Delete receipt"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex justify-end gap-3 pt-4">
                     <button
                       type="button"
