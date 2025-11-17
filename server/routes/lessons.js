@@ -8,6 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { isEmailConfigured } from '../utils/emailService.js';
 // Email functions to students/parents are disabled - only teacher schedule emails are allowed
 
 const router = express.Router();
@@ -2193,9 +2194,222 @@ router.post('/sms/send-daily-schedule', authenticateToken, async (req, res) => {
   res.status(403).json({ message: 'Emails to students/parents are disabled. Only teacher schedule emails are allowed.' });
 });
 
-// Manual trigger for reminders - DISABLED (emails to students/parents are disabled)
-router.post('/sms/send-reminders', authenticateToken, async (req, res) => {
-  res.status(403).json({ message: 'Emails to students/parents are disabled. Only teacher schedule emails are allowed.' });
+// Preview reminders for a specific date
+router.get('/reminders/preview', authenticateToken, async (req, res) => {
+  try {
+    const { date } = req.query;
+    
+    if (!date) {
+      return res.status(400).json({ message: 'Date is required' });
+    }
+
+    // Parse date string (YYYY-MM-DD) and create date in local timezone
+    // This avoids timezone conversion issues
+    const dateParts = date.split('-');
+    const year = parseInt(dateParts[0], 10);
+    const month = parseInt(dateParts[1], 10) - 1; // Month is 0-indexed
+    const day = parseInt(dateParts[2], 10);
+    
+    const targetDate = new Date(year, month, day, 0, 0, 0, 0);
+    const endDate = new Date(year, month, day, 23, 59, 59, 999);
+
+    // Get all lessons for the target date
+    const lessons = await prisma.lesson.findMany({
+      where: {
+        userId: req.user.id,
+        dateTime: {
+          gte: targetDate,
+          lte: endDate
+        }
+      },
+      include: {
+        student: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            parentEmail: true,
+            parentFullName: true
+          }
+        }
+      },
+      orderBy: {
+        dateTime: 'asc'
+      }
+    });
+
+    // Build preview of emails
+    const emailPreviews = lessons.map(lesson => {
+      const dateTime = new Date(lesson.dateTime);
+      const timeStr = dateTime.toLocaleTimeString('en-US', { 
+        hour: 'numeric', 
+        minute: '2-digit'
+      });
+      const dateStr = dateTime.toLocaleDateString('en-US', { 
+        weekday: 'long',
+        month: 'long', 
+        day: 'numeric'
+      });
+
+      const recipientEmail = lesson.student.parentEmail || lesson.student.email;
+      const recipientName = lesson.student.parentFullName || `${lesson.student.firstName} ${lesson.student.lastName}`;
+      
+      const subject = `Lesson Reminder: ${lesson.subject || 'Lesson'} on ${dateStr} at ${timeStr}`;
+      const text = `Hello ${recipientName},\n\n` +
+        `This is a reminder that ${lesson.student.firstName} ${lesson.student.lastName} has a ${lesson.subject || 'lesson'} on ${dateStr} at ${timeStr}.\n\n` +
+        `See you there!`;
+
+      return {
+        lessonId: lesson.id,
+        studentName: `${lesson.student.firstName} ${lesson.student.lastName}`,
+        recipientName,
+        recipientEmail,
+        subject,
+        text,
+        dateTime: lesson.dateTime,
+        lessonSubject: lesson.subject,
+        hasEmail: !!recipientEmail
+      };
+    });
+
+    res.json({
+      date: date,
+      dateStr: targetDate.toLocaleDateString('en-US', { 
+        weekday: 'long',
+        month: 'long', 
+        day: 'numeric',
+        year: 'numeric'
+      }),
+      emails: emailPreviews,
+      totalLessons: lessons.length,
+      emailsToSend: emailPreviews.filter(e => e.hasEmail).length
+    });
+  } catch (error) {
+    console.error('Error previewing reminders:', error);
+    res.status(500).json({ message: 'Error previewing reminders' });
+  }
+});
+
+// Send reminder emails for a specific date
+router.post('/reminders/send', authenticateToken, async (req, res) => {
+  try {
+    const { date } = req.body;
+    
+    if (!date) {
+      return res.status(400).json({ message: 'Date is required' });
+    }
+
+    if (!isEmailConfigured()) {
+      return res.status(400).json({ message: 'Email service not configured' });
+    }
+
+    // Parse date string (YYYY-MM-DD) and create date in local timezone
+    // This avoids timezone conversion issues
+    const dateParts = date.split('-');
+    const year = parseInt(dateParts[0], 10);
+    const month = parseInt(dateParts[1], 10) - 1; // Month is 0-indexed
+    const day = parseInt(dateParts[2], 10);
+    
+    const targetDate = new Date(year, month, day, 0, 0, 0, 0);
+    const endDate = new Date(year, month, day, 23, 59, 59, 999);
+
+    // Get all lessons for the target date
+    const lessons = await prisma.lesson.findMany({
+      where: {
+        userId: req.user.id,
+        dateTime: {
+          gte: targetDate,
+          lte: endDate
+        }
+      },
+      include: {
+        student: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            parentEmail: true,
+            parentFullName: true
+          }
+        }
+      }
+    });
+
+    const { sendEmail } = await import('../utils/emailService.js');
+    
+    let sentCount = 0;
+    let failedCount = 0;
+    const results = [];
+
+    for (const lesson of lessons) {
+      const recipientEmail = lesson.student.parentEmail || lesson.student.email;
+      
+      if (!recipientEmail) {
+        results.push({
+          studentName: `${lesson.student.firstName} ${lesson.student.lastName}`,
+          email: null,
+          status: 'skipped',
+          reason: 'No email address'
+        });
+        failedCount++;
+        continue;
+      }
+
+      try {
+        const dateTime = new Date(lesson.dateTime);
+        const timeStr = dateTime.toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit'
+        });
+        const dateStr = dateTime.toLocaleDateString('en-US', { 
+          weekday: 'long',
+          month: 'long', 
+          day: 'numeric'
+        });
+
+        const recipientName = lesson.student.parentFullName || `${lesson.student.firstName} ${lesson.student.lastName}`;
+        const subject = `Lesson Reminder: ${lesson.subject || 'Lesson'} on ${dateStr} at ${timeStr}`;
+        const text = `Hello ${recipientName},\n\n` +
+          `This is a reminder that ${lesson.student.firstName} ${lesson.student.lastName} has a ${lesson.subject || 'lesson'} on ${dateStr} at ${timeStr}.\n\n` +
+          `See you there!`;
+
+        await sendEmail({
+          to: recipientEmail,
+          subject: subject,
+          text: text
+        });
+
+        results.push({
+          studentName: `${lesson.student.firstName} ${lesson.student.lastName}`,
+          email: recipientEmail,
+          status: 'sent'
+        });
+        sentCount++;
+      } catch (error) {
+        console.error(`Error sending reminder to ${recipientEmail}:`, error);
+        results.push({
+          studentName: `${lesson.student.firstName} ${lesson.student.lastName}`,
+          email: recipientEmail,
+          status: 'failed',
+          reason: error.message
+        });
+        failedCount++;
+      }
+    }
+
+    res.json({
+      message: `Reminders sent: ${sentCount} successful, ${failedCount} failed`,
+      sentCount,
+      failedCount,
+      totalLessons: lessons.length,
+      results
+    });
+  } catch (error) {
+    console.error('Error sending reminders:', error);
+    res.status(500).json({ message: 'Error sending reminders' });
+  }
 });
 
 // Send today's full schedule via email to teacher (manual)

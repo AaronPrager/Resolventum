@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { Calendar as BigCalendar, momentLocalizer } from 'react-big-calendar'
 import moment from 'moment'
 import 'react-big-calendar/lib/css/react-big-calendar.css'
-import { Clock, User, MapPin, Calendar as CalendarIcon, Video, X, Plus, Trash2, MessageSquare } from 'lucide-react'
+import { Clock, User, MapPin, Calendar as CalendarIcon, Video, X, Plus, Trash2, MessageSquare, Bell, Mail, Phone } from 'lucide-react'
 import { api } from '../utils/api'
 import toast from 'react-hot-toast'
 
@@ -110,11 +110,19 @@ export function Calendar() {
   const [numberOfClasses, setNumberOfClasses] = useState(10)
   const [showEmailModal, setShowEmailModal] = useState(false)
   const [emailDate, setEmailDate] = useState(() => {
-    // Default to tomorrow
     const tomorrow = new Date()
     tomorrow.setDate(tomorrow.getDate() + 1)
     return tomorrow.toISOString().split('T')[0]
   })
+  const [showReminderModal, setShowReminderModal] = useState(false)
+  const [reminderDate, setReminderDate] = useState(() => {
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return tomorrow.toISOString().split('T')[0]
+  })
+  const [reminderPreview, setReminderPreview] = useState(null)
+  const [loadingPreview, setLoadingPreview] = useState(false)
+  const [sendingReminders, setSendingReminders] = useState(false)
 
   // Helper functions
   const getCurrentDateTime = () => {
@@ -271,6 +279,66 @@ export function Calendar() {
       toast.error(error.response?.data?.message || 'Failed to send schedule', { id: 'send-schedule' })
     }
   }
+
+  const handleSendReminders = () => {
+    setShowReminderModal(true)
+    setReminderPreview(null)
+  }
+
+  const handlePreviewReminders = async () => {
+    if (!reminderDate) {
+      toast.error('Please select a date')
+      return
+    }
+
+    setLoadingPreview(true)
+    try {
+      const { data } = await api.get('/lessons/reminders/preview', {
+        params: { date: reminderDate }
+      })
+      setReminderPreview(data)
+    } catch (error) {
+      console.error('Error previewing reminders:', error)
+      toast.error(error.response?.data?.message || 'Failed to preview reminders')
+    } finally {
+      setLoadingPreview(false)
+    }
+  }
+
+  const handleSendReminderEmails = async () => {
+    if (!reminderDate) {
+      toast.error('Please select a date')
+      return
+    }
+
+    setSendingReminders(true)
+    try {
+      toast.loading('Sending reminders...', { id: 'send-reminders' })
+      const { data } = await api.post('/lessons/reminders/send', {
+        date: reminderDate
+      })
+      const dateStr = new Date(reminderDate).toLocaleDateString('en-US', { 
+        month: 'long', 
+        day: 'numeric', 
+        year: 'numeric' 
+      })
+      toast.success(`Reminders for ${dateStr} sent! ${data.sentCount} email${data.sentCount !== 1 ? 's' : ''} sent.`, { id: 'send-reminders' })
+      setShowReminderModal(false)
+      setReminderPreview(null)
+    } catch (error) {
+      console.error('Error sending reminders:', error)
+      toast.error(error.response?.data?.message || 'Failed to send reminders', { id: 'send-reminders' })
+    } finally {
+      setSendingReminders(false)
+    }
+  }
+
+  useEffect(() => {
+    if (showReminderModal && reminderDate) {
+      handlePreviewReminders()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reminderDate, showReminderModal])
 
   const handleScheduleLesson = () => {
     const currentDateTime = getCurrentDateTime()
@@ -987,6 +1055,13 @@ export function Calendar() {
             <div className="p-6 pb-4 flex justify-end items-center">
               <div className="flex gap-2">
                 <button
+                  onClick={handleSendReminders}
+                  className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Send reminders to students"
+                >
+                  <Bell className="h-5 w-5" />
+                </button>
+                <button
                   onClick={handleSendTeacherSchedule}
                   className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
                   title="Send schedule via email"
@@ -1153,12 +1228,19 @@ export function Calendar() {
         </div>
       ) : (
         // Day view: Keep side-by-side layout
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Calendar - Takes 2 columns */}
           <div className="lg:col-span-2 bg-white rounded-lg shadow">
             {/* Calendar Header with buttons */}
             <div className="p-6 pb-4 flex justify-end items-center">
               <div className="flex gap-2">
+                <button
+                  onClick={handleSendReminders}
+                  className="p-1.5 rounded-md text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Send reminders to students"
+                >
+                  <Bell className="h-5 w-5" />
+                </button>
                 <button
                   onClick={handleSendTeacherSchedule}
                   className="p-1.5 rounded-md text-green-600 hover:bg-green-50 transition-colors"
@@ -1323,6 +1405,119 @@ export function Calendar() {
               )}
             </div>
           </div>
+          
+          {/* Today's Students Details - Only in Day View */}
+          {currentView === 'day' && (() => {
+            const uniqueStudents = new Map()
+            currentViewLessons.forEach(lesson => {
+              if (lesson.student && !uniqueStudents.has(lesson.student.id)) {
+                uniqueStudents.set(lesson.student.id, lesson.student)
+              }
+            })
+            const studentsArray = Array.from(uniqueStudents.values())
+            const studentCount = studentsArray.length
+            
+            return (
+              <div className="bg-white rounded-lg shadow">
+                <div className="p-4 border-b border-gray-200">
+                  <h2 className="text-lg font-semibold text-gray-900">Today's Students</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {studentCount} {studentCount === 1 ? 'student' : 'students'}
+                  </p>
+                </div>
+                <div className="overflow-y-auto max-h-[640px] p-4">
+                  {studentCount === 0 ? (
+                    <div className="p-8 text-center text-gray-500 text-sm">
+                      No students scheduled today
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {studentsArray.map((student) => (
+                        <div key={student.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <h3 className="text-sm font-semibold text-gray-900 mb-2">
+                            {student.firstName} {student.lastName}
+                          </h3>
+                          <div className="space-y-2">
+                            {/* Student Email */}
+                            {student.email && (
+                              <div className="flex items-center gap-2 text-xs">
+                                <Mail className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-gray-500">Student:</span>
+                                  <a 
+                                    href={`mailto:${student.email}`}
+                                    className="text-indigo-600 hover:text-indigo-800 ml-1 break-all"
+                                  >
+                                    {student.email}
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Student Phone */}
+                            {student.phone && (
+                              <div className="flex items-center gap-2 text-xs">
+                                <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-gray-500">Student:</span>
+                                  <a 
+                                    href={`sms:${student.phone}`}
+                                    className="text-indigo-600 hover:text-indigo-800 ml-1"
+                                  >
+                                    {student.phone}
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Parent Email */}
+                            {student.parentEmail && (
+                              <div className="flex items-center gap-2 text-xs">
+                                <Mail className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-gray-500">Parent:</span>
+                                  <a 
+                                    href={`mailto:${student.parentEmail}`}
+                                    className="text-indigo-600 hover:text-indigo-800 ml-1 break-all"
+                                  >
+                                    {student.parentEmail}
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Parent Phone */}
+                            {student.parentPhone && (
+                              <div className="flex items-center gap-2 text-xs">
+                                <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-gray-500">Parent:</span>
+                                  <a 
+                                    href={`sms:${student.parentPhone}`}
+                                    className="text-indigo-600 hover:text-indigo-800 ml-1"
+                                  >
+                                    {student.parentPhone}
+                                  </a>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* Show message if no contact info */}
+                            {!student.email && 
+                             !student.phone && 
+                             !student.parentEmail && 
+                             !student.parentPhone && (
+                              <p className="text-xs text-gray-400 italic">No contact information available</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })()}
         </div>
       )}
 
@@ -1388,6 +1583,86 @@ export function Calendar() {
                 </>
               ) : null}
             </div>
+
+            {/* Mini Student Card - Only in Day View when not editing */}
+            {!isEditing && selectedLesson && currentView === 'day' && (
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                <h3 className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">Contact Information</h3>
+                <div className="space-y-2">
+                  {/* Student Email */}
+                  {selectedLesson.student.email && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <Mail className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <span className="text-gray-500">Student:</span>
+                        <a 
+                          href={`mailto:${selectedLesson.student.email}`}
+                          className="text-indigo-600 hover:text-indigo-800 ml-1 break-all"
+                        >
+                          {selectedLesson.student.email}
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Student Phone */}
+                  {selectedLesson.student.phone && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <span className="text-gray-500">Student:</span>
+                        <a 
+                          href={`sms:${selectedLesson.student.phone}`}
+                          className="text-indigo-600 hover:text-indigo-800 ml-1"
+                        >
+                          {selectedLesson.student.phone}
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Parent Email */}
+                  {selectedLesson.student.parentEmail && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <Mail className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <span className="text-gray-500">Parent:</span>
+                        <a 
+                          href={`mailto:${selectedLesson.student.parentEmail}`}
+                          className="text-indigo-600 hover:text-indigo-800 ml-1 break-all"
+                        >
+                          {selectedLesson.student.parentEmail}
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Parent Phone */}
+                  {selectedLesson.student.parentPhone && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <Phone className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <span className="text-gray-500">Parent:</span>
+                        <a 
+                          href={`sms:${selectedLesson.student.parentPhone}`}
+                          className="text-indigo-600 hover:text-indigo-800 ml-1"
+                        >
+                          {selectedLesson.student.parentPhone}
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Show message if no contact info */}
+                  {!selectedLesson.student.email && 
+                   !selectedLesson.student.phone && 
+                   !selectedLesson.student.parentEmail && 
+                   !selectedLesson.student.parentPhone && (
+                    <p className="text-xs text-gray-400 italic">No contact information available</p>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* All-Day */}
             {isEditing && (
@@ -2344,6 +2619,126 @@ export function Calendar() {
                 >
                   Cancel
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send Reminders Modal */}
+      {showReminderModal && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowReminderModal(false)}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full" onClick={(e) => e.stopPropagation()}>
+              <div className="bg-white">
+                <div className="bg-indigo-600 text-white px-4 py-3 flex justify-between items-center">
+                  <h2 className="text-base font-semibold">
+                    Send Reminders to Students
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowReminderModal(false)
+                      setReminderPreview(null)
+                    }}
+                    className="text-white hover:bg-indigo-700 rounded-full p-1 transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                
+                <div className="p-4 space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select date for reminders
+                    </label>
+                    <input
+                      type="date"
+                      value={reminderDate}
+                      onChange={(e) => setReminderDate(e.target.value)}
+                      className="w-full text-sm border-gray-300 rounded-md focus:border-indigo-500 focus:ring-indigo-500"
+                    />
+                    <p className="mt-2 text-xs text-gray-500">
+                      Reminder emails will be sent to students/parents for lessons on the selected date.
+                    </p>
+                  </div>
+
+                  {loadingPreview && (
+                    <div className="text-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+                      <p className="mt-2 text-sm text-gray-500">Loading preview...</p>
+                    </div>
+                  )}
+
+                  {reminderPreview && !loadingPreview && (
+                    <div className="border border-gray-200 rounded-md p-4 bg-gray-50">
+                      <div className="mb-4">
+                        <h3 className="text-sm font-semibold text-gray-900 mb-1">
+                          Email Preview for {reminderPreview.dateStr}
+                        </h3>
+                        <p className="text-xs text-gray-600">
+                          {reminderPreview.totalLessons} lesson{reminderPreview.totalLessons !== 1 ? 's' : ''} found, 
+                          {' '}{reminderPreview.emailsToSend} email{reminderPreview.emailsToSend !== 1 ? 's' : ''} will be sent
+                        </p>
+                      </div>
+                      
+                      <div className="space-y-3 max-h-96 overflow-y-auto">
+                        {reminderPreview.emails.length === 0 ? (
+                          <p className="text-sm text-gray-500 text-center py-4">
+                            No lessons found for this date.
+                          </p>
+                        ) : (
+                          reminderPreview.emails.map((email, idx) => (
+                            <div key={idx} className="bg-white border border-gray-200 rounded-md p-3">
+                              <div className="flex items-start justify-between mb-2">
+                                <div>
+                                  <p className="text-sm font-medium text-gray-900">
+                                    {email.studentName}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    To: {email.recipientName} {email.recipientEmail && `(${email.recipientEmail})`}
+                                  </p>
+                                </div>
+                                {!email.hasEmail && (
+                                  <span className="text-xs text-red-600 font-medium">No email address</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-600 space-y-1">
+                                <p><span className="font-medium">Subject:</span> {email.subject}</p>
+                                <div className="mt-2 p-2 bg-gray-50 rounded border border-gray-200">
+                                  <p className="font-medium mb-1">Email Content:</p>
+                                  <pre className="text-xs whitespace-pre-wrap font-sans">{email.text}</pre>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 border-t border-gray-200 space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleSendReminderEmails}
+                    disabled={sendingReminders || loadingPreview || !reminderPreview || reminderPreview.emailsToSend === 0}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {sendingReminders ? 'Sending...' : `Send ${reminderPreview?.emailsToSend || 0} Reminder${reminderPreview?.emailsToSend !== 1 ? 's' : ''}`}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowReminderModal(false)
+                      setReminderPreview(null)
+                    }}
+                    className="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             </div>
           </div>
