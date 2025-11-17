@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../utils/api'
-import { Plus, X, Trash2, Edit, Calendar as CalendarIcon, DollarSign, Tag, Building2, CreditCard, Repeat, Save } from 'lucide-react'
+import { Plus, X, Trash2, Edit, Calendar as CalendarIcon, DollarSign, Tag, Building2, CreditCard, Repeat, Save, Settings } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export function Purchases() {
+  const navigate = useNavigate()
   const [purchases, setPurchases] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [editingPurchase, setEditingPurchase] = useState(null)
@@ -15,6 +17,22 @@ export function Purchases() {
   const [filterCategory, setFilterCategory] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [customCategories, setCustomCategories] = useState([])
+  const [showAddCategoryModal, setShowAddCategoryModal] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
+  const [addingCategory, setAddingCategory] = useState(false)
+  const [showAddVendorModal, setShowAddVendorModal] = useState(false)
+  const [newVendorName, setNewVendorName] = useState('')
+  const [addingVendor, setAddingVendor] = useState(false)
+  const [showAddPaymentMethodModal, setShowAddPaymentMethodModal] = useState(false)
+  const [newPaymentMethod, setNewPaymentMethod] = useState({
+    type: 'credit_card',
+    name: '',
+    last4: '',
+    bank: '',
+    notes: ''
+  })
+  const [addingPaymentMethod, setAddingPaymentMethod] = useState(false)
   const [formData, setFormData] = useState({
     date: new Date().toISOString().split('T')[0],
     description: '',
@@ -28,16 +46,132 @@ export function Purchases() {
     recurringEndDate: ''
   })
 
-  const categories = ['Unassigned', 'Supplies', 'Equipment', 'Software', 'Travel', 'Marketing', 'Office', 'Other']
+  const defaultCategories = ['Unassigned', 'Supplies', 'Equipment', 'Software', 'Travel', 'Marketing', 'Office', 'Other']
+  const [frequentVendors, setFrequentVendors] = useState([])
+  const [savedPaymentMethods, setSavedPaymentMethods] = useState([])
 
   useEffect(() => {
     fetchPurchases()
+    fetchFrequentVendors()
+    fetchCustomCategories()
+    fetchPaymentMethods()
   }, [])
+
+  const fetchCustomCategories = async () => {
+    try {
+      const { data } = await api.get('/purchases/settings/categories')
+      setCustomCategories(data)
+    } catch (error) {
+      console.error('Failed to load custom categories:', error)
+    }
+  }
+
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) {
+      toast.error('Category name is required')
+      return
+    }
+
+    setAddingCategory(true)
+    try {
+      await api.post('/purchases/settings/categories', { category: newCategoryName.trim() })
+      await fetchCustomCategories()
+      setFormData({ ...formData, category: newCategoryName.trim() })
+      setNewCategoryName('')
+      setShowAddCategoryModal(false)
+      toast.success('Category added successfully')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to add category')
+    } finally {
+      setAddingCategory(false)
+    }
+  }
+
+  const handleAddVendorFromModal = async () => {
+    if (!newVendorName.trim()) {
+      toast.error('Vendor name is required')
+      return
+    }
+
+    setAddingVendor(true)
+    try {
+      await api.post('/purchases/vendors', { vendor: newVendorName.trim() })
+      await fetchFrequentVendors()
+      setFormData({ ...formData, vendor: newVendorName.trim() })
+      setNewVendorName('')
+      setShowAddVendorModal(false)
+      toast.success('Vendor added successfully')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to add vendor')
+    } finally {
+      setAddingVendor(false)
+    }
+  }
+
+  const handleAddPaymentMethodFromModal = async () => {
+    if (!newPaymentMethod.name.trim()) {
+      toast.error('Payment method name is required')
+      return
+    }
+
+    setAddingPaymentMethod(true)
+    try {
+      await api.post('/purchases/settings/payment-methods', newPaymentMethod)
+      await fetchPaymentMethods()
+      setFormData({ ...formData, paymentMethod: newPaymentMethod.name.trim() })
+      setNewPaymentMethod({
+        type: 'credit_card',
+        name: '',
+        last4: '',
+        bank: '',
+        notes: ''
+      })
+      setShowAddPaymentMethodModal(false)
+      toast.success('Payment method added successfully')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to add payment method')
+    } finally {
+      setAddingPaymentMethod(false)
+    }
+  }
+
+  const fetchPaymentMethods = async () => {
+    try {
+      const { data } = await api.get('/purchases/settings/payment-methods')
+      setSavedPaymentMethods(data)
+    } catch (error) {
+      console.error('Failed to load payment methods:', error)
+    }
+  }
+
+  const categories = [...defaultCategories, ...customCategories]
 
   useEffect(() => {
     fetchPurchases()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterMonth, filterYear, filterCategory])
+
+  const fetchFrequentVendors = async () => {
+    try {
+      const { data } = await api.get('/purchases/vendors')
+      setFrequentVendors(data)
+    } catch (error) {
+      console.error('Failed to load frequent vendors:', error)
+    }
+  }
+
+  const handleAddVendor = async (vendor) => {
+    if (!vendor || !vendor.trim()) return
+    
+    try {
+      await api.post('/purchases/vendors', { vendor: vendor.trim() })
+      await fetchFrequentVendors()
+      toast.success(`Added "${vendor.trim()}" to frequent vendors`)
+    } catch (error) {
+      console.error('Failed to add vendor:', error)
+      toast.error('Failed to add vendor')
+    }
+  }
 
   const fetchPurchases = async () => {
     try {
@@ -200,6 +334,12 @@ export function Purchases() {
         }
       }
       fetchPurchases()
+      // Refresh frequent vendors if vendor was added
+      if (submitData.vendor && submitData.vendor.trim()) {
+        await fetchFrequentVendors()
+      }
+      // Refresh payment methods in case they were updated
+      await fetchPaymentMethods()
       handleCloseModal()
     } catch (error) {
       // Only show error if it's not a validation error (which we handle above)
@@ -266,13 +406,22 @@ export function Purchases() {
           <h1 className="text-2xl font-bold text-gray-900">Purchases</h1>
           <p className="text-sm text-gray-500 mt-1">Track your business expenses</p>
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
-        >
-          <Plus className="h-5 w-5" />
-          Add Purchase
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => navigate('/purchases/settings')}
+            className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 transition-colors"
+          >
+            <Settings className="h-5 w-5" />
+            Settings
+          </button>
+          <button
+            onClick={() => handleOpenModal()}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
+          >
+            <Plus className="h-5 w-5" />
+            Add Purchase
+          </button>
+        </div>
       </div>
 
       {/* Summary Card */}
@@ -443,10 +592,16 @@ export function Purchases() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {purchase.paymentMethod ? (
-                        <span className="capitalize">
+                        <span>
                           {purchase.paymentMethod === 'credit_card' 
                             ? 'Credit Card' 
-                            : purchase.paymentMethod.charAt(0).toUpperCase() + purchase.paymentMethod.slice(1)}
+                            : purchase.paymentMethod === 'cash'
+                            ? 'Cash'
+                            : purchase.paymentMethod === 'venmo'
+                            ? 'Venmo'
+                            : purchase.paymentMethod === 'zelle'
+                            ? 'Zelle'
+                            : purchase.paymentMethod}
                         </span>
                       ) : '-'}
                     </td>
@@ -539,38 +694,83 @@ export function Purchases() {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                     <select
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                      value={formData.category === '__ADD_CATEGORY__' ? '' : formData.category}
+                      onChange={(e) => {
+                        if (e.target.value === '__ADD_CATEGORY__') {
+                          setShowAddCategoryModal(true)
+                          // Reset to empty to avoid showing the special value
+                          setTimeout(() => setFormData({ ...formData, category: '' }), 0)
+                        } else {
+                          setFormData({ ...formData, category: e.target.value })
+                        }
+                      }}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
                     >
                       <option value="">Unassigned</option>
                       {categories.filter(cat => cat !== 'Unassigned').map(cat => (
                         <option key={cat} value={cat}>{cat}</option>
                       ))}
+                      <option value="__ADD_CATEGORY__" className="text-indigo-600 font-medium">
+                        + Add Category
+                      </option>
                     </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Vendor</label>
-                    <input
-                      type="text"
-                      value={formData.vendor}
-                      onChange={(e) => setFormData({ ...formData, vendor: e.target.value })}
+                    <select
+                      value={formData.vendor === '__ADD_VENDOR__' ? '' : formData.vendor}
+                      onChange={(e) => {
+                        if (e.target.value === '__ADD_VENDOR__') {
+                          setShowAddVendorModal(true)
+                          setTimeout(() => setFormData({ ...formData, vendor: '' }), 0)
+                        } else {
+                          setFormData({ ...formData, vendor: e.target.value })
+                        }
+                      }}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                      placeholder="e.g., Amazon, Office Depot"
-                    />
+                    >
+                      <option value="">Select vendor</option>
+                      {frequentVendors.map((vendor, idx) => (
+                        <option key={idx} value={vendor}>{vendor}</option>
+                      ))}
+                      <option value="__ADD_VENDOR__" className="text-indigo-600 font-medium">
+                        + Add Vendor
+                      </option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Payment Method</label>
                     <select
-                      value={formData.paymentMethod}
-                      onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                      value={formData.paymentMethod === '__ADD_PAYMENT_METHOD__' ? '' : formData.paymentMethod}
+                      onChange={(e) => {
+                        if (e.target.value === '__ADD_PAYMENT_METHOD__') {
+                          setShowAddPaymentMethodModal(true)
+                          setTimeout(() => setFormData({ ...formData, paymentMethod: '' }), 0)
+                        } else {
+                          setFormData({ ...formData, paymentMethod: e.target.value })
+                        }
+                      }}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
                     >
                       <option value="">Select payment method</option>
-                      <option value="cash">Cash</option>
-                      <option value="venmo">Venmo</option>
-                      <option value="zelle">Zelle</option>
-                      <option value="credit_card">Credit Card</option>
+                      {savedPaymentMethods.length > 0 && (
+                        <optgroup label="Saved Payment Methods">
+                          {savedPaymentMethods.map((method) => (
+                            <option key={method.id} value={method.name}>
+                              {method.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      <optgroup label="Quick Options">
+                        <option value="cash">Cash</option>
+                        <option value="venmo">Venmo</option>
+                        <option value="zelle">Zelle</option>
+                        <option value="credit_card">Credit Card</option>
+                      </optgroup>
+                      <option value="__ADD_PAYMENT_METHOD__" className="text-indigo-600 font-medium">
+                        + Add Payment Method
+                      </option>
                     </select>
                   </div>
                   <div>
@@ -719,6 +919,232 @@ export function Purchases() {
                     </button>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Category Modal */}
+      {showAddCategoryModal && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowAddCategoryModal(false)}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Add New Category
+                  </h3>
+                  <button onClick={() => setShowAddCategoryModal(false)} className="text-gray-400 hover:text-gray-500">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Category Name *</label>
+                    <input
+                      type="text"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddCategory()}
+                      placeholder="e.g., Software Subscription, Office Supplies"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      autoFocus
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      This category will be saved and available for future purchases
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddCategoryModal(false)
+                        setNewCategoryName('')
+                      }}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleAddCategory}
+                      disabled={addingCategory || !newCategoryName.trim()}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      {addingCategory ? 'Adding...' : 'Add Category'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Vendor Modal */}
+      {showAddVendorModal && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowAddVendorModal(false)}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Add New Vendor
+                  </h3>
+                  <button onClick={() => setShowAddVendorModal(false)} className="text-gray-400 hover:text-gray-500">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Vendor Name *</label>
+                    <input
+                      type="text"
+                      value={newVendorName}
+                      onChange={(e) => setNewVendorName(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleAddVendorFromModal()}
+                      placeholder="e.g., Amazon, Office Depot"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      autoFocus
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      This vendor will be saved and available for future purchases
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddVendorModal(false)
+                        setNewVendorName('')
+                      }}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleAddVendorFromModal}
+                      disabled={addingVendor || !newVendorName.trim()}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      {addingVendor ? 'Adding...' : 'Add Vendor'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Payment Method Modal */}
+      {showAddPaymentMethodModal && (
+        <div className="fixed z-50 inset-0 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={() => setShowAddPaymentMethodModal(false)}></div>
+            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Add New Payment Method
+                  </h3>
+                  <button onClick={() => setShowAddPaymentMethodModal(false)} className="text-gray-400 hover:text-gray-500">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Type *</label>
+                    <select
+                      value={newPaymentMethod.type}
+                      onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, type: e.target.value })}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    >
+                      <option value="credit_card">Credit Card</option>
+                      <option value="debit_card">Debit Card</option>
+                      <option value="bank_account">Bank Account</option>
+                      <option value="venmo">Venmo</option>
+                      <option value="zelle">Zelle</option>
+                      <option value="cash">Cash</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                    <input
+                      type="text"
+                      value={newPaymentMethod.name}
+                      onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, name: e.target.value })}
+                      placeholder="e.g., Business Credit Card, Chase Checking"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      autoFocus
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      This payment method will be saved and available for future purchases
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Last 4 Digits</label>
+                    <input
+                      type="text"
+                      value={newPaymentMethod.last4}
+                      onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, last4: e.target.value })}
+                      placeholder="e.g., 1234"
+                      maxLength={4}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Bank/Institution</label>
+                    <input
+                      type="text"
+                      value={newPaymentMethod.bank}
+                      onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, bank: e.target.value })}
+                      placeholder="e.g., Chase, Bank of America"
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                    <textarea
+                      value={newPaymentMethod.notes}
+                      onChange={(e) => setNewPaymentMethod({ ...newPaymentMethod, notes: e.target.value })}
+                      rows={3}
+                      placeholder="Additional notes..."
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAddPaymentMethodModal(false)
+                        setNewPaymentMethod({
+                          type: 'credit_card',
+                          name: '',
+                          last4: '',
+                          bank: '',
+                          notes: ''
+                        })
+                      }}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleAddPaymentMethodFromModal}
+                      disabled={addingPaymentMethod || !newPaymentMethod.name.trim()}
+                      className="px-4 py-2 bg-indigo-600 text-white rounded-md text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      <Save className="h-4 w-4" />
+                      {addingPaymentMethod ? 'Adding...' : 'Add Payment Method'}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

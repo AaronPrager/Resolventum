@@ -69,6 +69,312 @@ function calculateRecurringDates(startDate, frequency, endDate) {
 
 router.use(authenticateToken);
 
+// Get frequent vendors for the user
+router.get('/vendors', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { frequentVendors: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const vendors = user.frequentVendors ? JSON.parse(user.frequentVendors) : [];
+    res.json(vendors);
+  } catch (error) {
+    console.error('Get vendors error:', error);
+    res.status(500).json({ message: 'Error fetching vendors' });
+  }
+});
+
+// Add vendor to frequent vendors
+router.post('/vendors', async (req, res) => {
+  try {
+    const { vendor } = req.body;
+    
+    if (!vendor || !vendor.trim()) {
+      return res.status(400).json({ message: 'Vendor name is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { frequentVendors: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const vendorName = vendor.trim();
+    const currentVendors = user.frequentVendors ? JSON.parse(user.frequentVendors) : [];
+    
+    // Remove vendor if it exists (to move it to the front)
+    const filteredVendors = currentVendors.filter(v => v.toLowerCase() !== vendorName.toLowerCase());
+    
+    // Add to the beginning of the array (most recent first)
+    const updatedVendors = [vendorName, ...filteredVendors].slice(0, 20); // Keep max 20 vendors
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { frequentVendors: JSON.stringify(updatedVendors) }
+    });
+
+    res.json(updatedVendors);
+  } catch (error) {
+    console.error('Add vendor error:', error);
+    res.status(500).json({ message: 'Error adding vendor' });
+  }
+});
+
+// Delete vendor from frequent vendors
+router.delete('/vendors/:vendor', async (req, res) => {
+  try {
+    const vendorName = decodeURIComponent(req.params.vendor);
+    
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { frequentVendors: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const currentVendors = user.frequentVendors ? JSON.parse(user.frequentVendors) : [];
+    const updatedVendors = currentVendors.filter(v => v.toLowerCase() !== vendorName.toLowerCase());
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { frequentVendors: JSON.stringify(updatedVendors) }
+    });
+
+    res.json(updatedVendors);
+  } catch (error) {
+    console.error('Delete vendor error:', error);
+    res.status(500).json({ message: 'Error deleting vendor' });
+  }
+});
+
+// Get custom categories
+router.get('/settings/categories', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { purchaseCategories: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const categories = user.purchaseCategories ? JSON.parse(user.purchaseCategories) : [];
+    res.json(categories);
+  } catch (error) {
+    console.error('Get categories error:', error);
+    res.status(500).json({ message: 'Error fetching categories' });
+  }
+});
+
+// Add custom category
+router.post('/settings/categories', async (req, res) => {
+  try {
+    const { category } = req.body;
+    
+    if (!category || !category.trim()) {
+      return res.status(400).json({ message: 'Category name is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { purchaseCategories: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const categoryName = category.trim();
+    const currentCategories = user.purchaseCategories ? JSON.parse(user.purchaseCategories) : [];
+    
+    // Check if category already exists
+    if (currentCategories.some(c => c.toLowerCase() === categoryName.toLowerCase())) {
+      return res.status(400).json({ message: 'Category already exists' });
+    }
+    
+    const updatedCategories = [...currentCategories, categoryName];
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { purchaseCategories: JSON.stringify(updatedCategories) }
+    });
+
+    res.json(updatedCategories);
+  } catch (error) {
+    console.error('Add category error:', error);
+    res.status(500).json({ message: 'Error adding category' });
+  }
+});
+
+// Delete custom category
+router.delete('/settings/categories/:category', async (req, res) => {
+  try {
+    const categoryName = decodeURIComponent(req.params.category);
+    
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { purchaseCategories: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const currentCategories = user.purchaseCategories ? JSON.parse(user.purchaseCategories) : [];
+    const updatedCategories = currentCategories.filter(c => c.toLowerCase() !== categoryName.toLowerCase());
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { purchaseCategories: JSON.stringify(updatedCategories) }
+    });
+
+    res.json(updatedCategories);
+  } catch (error) {
+    console.error('Delete category error:', error);
+    res.status(500).json({ message: 'Error deleting category' });
+  }
+});
+
+// Get payment methods
+router.get('/settings/payment-methods', async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { paymentMethodDetails: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const paymentMethods = user.paymentMethodDetails ? JSON.parse(user.paymentMethodDetails) : [];
+    res.json(paymentMethods);
+  } catch (error) {
+    console.error('Get payment methods error:', error);
+    res.status(500).json({ message: 'Error fetching payment methods' });
+  }
+});
+
+// Add payment method
+router.post('/settings/payment-methods', async (req, res) => {
+  try {
+    const { type, name, last4, bank, notes } = req.body;
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Payment method name is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { paymentMethodDetails: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const currentMethods = user.paymentMethodDetails ? JSON.parse(user.paymentMethodDetails) : [];
+    const newMethod = {
+      id: uuidv4(),
+      type: type || 'other',
+      name: name.trim(),
+      last4: last4 ? last4.trim() : null,
+      bank: bank ? bank.trim() : null,
+      notes: notes ? notes.trim() : null
+    };
+    
+    const updatedMethods = [...currentMethods, newMethod];
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { paymentMethodDetails: JSON.stringify(updatedMethods) }
+    });
+
+    res.json(updatedMethods);
+  } catch (error) {
+    console.error('Add payment method error:', error);
+    res.status(500).json({ message: 'Error adding payment method' });
+  }
+});
+
+// Update payment method
+router.put('/settings/payment-methods/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, name, last4, bank, notes } = req.body;
+    
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Payment method name is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { paymentMethodDetails: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const currentMethods = user.paymentMethodDetails ? JSON.parse(user.paymentMethodDetails) : [];
+    const updatedMethods = currentMethods.map(m => 
+      m.id === id 
+        ? { ...m, type, name: name.trim(), last4: last4 ? last4.trim() : null, bank: bank ? bank.trim() : null, notes: notes ? notes.trim() : null }
+        : m
+    );
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { paymentMethodDetails: JSON.stringify(updatedMethods) }
+    });
+
+    res.json(updatedMethods);
+  } catch (error) {
+    console.error('Update payment method error:', error);
+    res.status(500).json({ message: 'Error updating payment method' });
+  }
+});
+
+// Delete payment method
+router.delete('/settings/payment-methods/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { paymentMethodDetails: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const currentMethods = user.paymentMethodDetails ? JSON.parse(user.paymentMethodDetails) : [];
+    const updatedMethods = currentMethods.filter(m => m.id !== id);
+
+    await prisma.user.update({
+      where: { id: req.user.id },
+      data: { paymentMethodDetails: JSON.stringify(updatedMethods) }
+    });
+
+    res.json(updatedMethods);
+  } catch (error) {
+    console.error('Delete payment method error:', error);
+    res.status(500).json({ message: 'Error deleting payment method' });
+  }
+});
+
 // Get all purchases
 router.get('/', async (req, res) => {
   try {
@@ -139,10 +445,7 @@ router.post('/', [
   body('amount').isFloat({ min: 0 }).withMessage('Valid amount is required'),
   body('category').optional().trim(),
   body('vendor').optional().trim(),
-  body('paymentMethod').optional({ values: 'falsy' }).custom((value) => {
-    if (!value || value === '') return true;
-    return ['venmo', 'zelle', 'credit_card', 'cash'].includes(value);
-  }).withMessage('Invalid payment method'),
+  body('paymentMethod').optional({ values: 'falsy' }).trim(),
   body('notes').optional().trim(),
   body('isRecurring').optional().isBoolean(),
   body('recurringFrequency').optional({ values: 'falsy' }).custom((value) => {
@@ -210,6 +513,11 @@ router.post('/', [
         data: purchasesData,
       });
 
+      // Update frequent vendors if vendor is provided
+      if (vendor && vendor.trim()) {
+        await updateFrequentVendors(req.user.id, vendor.trim());
+      }
+
       // Fetch the created purchases to return
       const createdPurchases = await prisma.purchase.findMany({
         where: { recurringGroupId },
@@ -239,6 +547,11 @@ router.post('/', [
         },
       });
 
+      // Update frequent vendors if vendor is provided
+      if (vendor && vendor.trim()) {
+        await updateFrequentVendors(req.user.id, vendor.trim());
+      }
+
       return res.status(201).json(purchase);
     }
   } catch (error) {
@@ -246,6 +559,34 @@ router.post('/', [
     res.status(500).json({ message: 'Error creating purchase' });
   }
 });
+
+// Helper function to update frequent vendors
+async function updateFrequentVendors(userId, vendorName) {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { frequentVendors: true }
+    });
+
+    if (!user) return;
+
+    const currentVendors = user.frequentVendors ? JSON.parse(user.frequentVendors) : [];
+    
+    // Remove vendor if it exists (to move it to the front)
+    const filteredVendors = currentVendors.filter(v => v.toLowerCase() !== vendorName.toLowerCase());
+    
+    // Add to the beginning of the array (most recent first)
+    const updatedVendors = [vendorName, ...filteredVendors].slice(0, 20); // Keep max 20 vendors
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { frequentVendors: JSON.stringify(updatedVendors) }
+    });
+  } catch (error) {
+    console.error('Error updating frequent vendors:', error);
+    // Don't throw - this is a non-critical operation
+  }
+}
 
 // Update purchase
 router.put('/:id', [
@@ -255,10 +596,7 @@ router.put('/:id', [
   body('category').optional().trim(),
   body('vendor').optional().trim(),
   body('receiptUrl').optional().trim(),
-  body('paymentMethod').optional({ values: 'falsy' }).custom((value) => {
-    if (!value || value === '') return true;
-    return ['venmo', 'zelle', 'credit_card', 'cash'].includes(value);
-  }).withMessage('Invalid payment method'),
+  body('paymentMethod').optional({ values: 'falsy' }).trim(),
   body('notes').optional().trim(),
 ], async (req, res) => {
   try {
@@ -301,6 +639,11 @@ router.put('/:id', [
       where: { id: req.params.id },
       data: updateData,
     });
+
+    // Update frequent vendors if vendor is provided
+    if (vendor !== undefined && vendor && vendor.trim()) {
+      await updateFrequentVendors(req.user.id, vendor.trim());
+    }
 
     res.json(purchase);
   } catch (error) {

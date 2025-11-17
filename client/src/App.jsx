@@ -7,6 +7,7 @@ import { Lessons } from './pages/Lessons'
 import { Calendar } from './pages/Calendar'
 import { Payments } from './pages/Payments'
 import { Purchases } from './pages/Purchases'
+import { PurchasesSettings } from './pages/PurchasesSettings'
 import { Reports } from './pages/Reports'
 import { Account } from './pages/Account'
 import { Verify } from './pages/Verify'
@@ -50,6 +51,7 @@ function AppRoutes() {
         <Route path="lessons" element={<ProtectedRoute><Lessons /></ProtectedRoute>} />
         <Route path="payments" element={<ProtectedRoute><Payments /></ProtectedRoute>} />
         <Route path="purchases" element={<ProtectedRoute><Purchases /></ProtectedRoute>} />
+        <Route path="purchases/settings" element={<ProtectedRoute><PurchasesSettings /></ProtectedRoute>} />
         <Route path="reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
         <Route path="account" element={<ProtectedRoute><Account /></ProtectedRoute>} />
         <Route path="verify" element={<Verify />} />

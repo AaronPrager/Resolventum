@@ -34,6 +34,9 @@ model User {
   googleDriveRefreshToken  String? // OAuth refresh token for Google Drive
   googleDriveTokenExpiry   DateTime? // When the access token expires
   googleDriveFolderId      String? // Optional: specific folder ID to store files in
+  frequentVendors          String? // JSON array of frequently used vendor names
+  purchaseCategories       String? // JSON array of custom purchase categories
+  paymentMethodDetails     String? // JSON object with payment method details (cards, accounts, etc.)
   deleted                  Boolean   @default(false) // Soft delete flag
   deletedAt                DateTime? // Timestamp when account was deleted
   createdAt                DateTime  @default(now())
