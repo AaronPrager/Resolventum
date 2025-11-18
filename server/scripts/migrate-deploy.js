@@ -61,6 +61,39 @@ try {
 } catch (error) {
   console.error('❌ Migration failed:', error.message);
   console.error('');
+  
+  // Always try to resolve failed migrations for our known migration
+  console.log('🔧 Attempting to resolve any failed migrations...');
+  
+  try {
+    // First, try to mark as rolled back (safer - allows retry)
+    console.log('   Marking migration as rolled back to allow retry...');
+    try {
+      execSync('npx prisma migrate resolve --rolled-back 20250123000000_add_home_office_deductions', {
+        encoding: 'utf-8',
+        env: process.env,
+        cwd: process.cwd(),
+        stdio: 'pipe' // Use pipe to suppress output unless it fails
+      });
+      console.log('   ✅ Migration marked as rolled back');
+      console.log('   Retrying migration deploy...');
+      execSync('npx prisma migrate deploy', {
+        stdio: 'inherit',
+        env: process.env,
+        cwd: process.cwd()
+      });
+      console.log('✅ Migrations completed successfully after resolution');
+      process.exit(0);
+    } catch (resolveError) {
+      // If resolve fails, the migration might not be in failed state, or already resolved
+      console.log('   ⚠️  Could not resolve (migration may not be in failed state)');
+      // Continue to show manual resolution instructions
+    }
+  } catch (resolveError) {
+    console.error('   ❌ Failed to resolve migration automatically');
+  }
+  
+  console.error('');
   console.error('This might be due to:');
   console.error('1. Network connectivity issues during build');
   console.error('2. Prisma Accelerate connection string format (migrations need DIRECT_URL)');
@@ -74,8 +107,9 @@ try {
     console.error('');
   }
   console.error('⚠️  Build will continue, but migrations may need to be run manually.');
-  console.error('⚠️  If the table already exists (from db push), you can mark this migration as applied:');
-  console.error('⚠️  Run: npx prisma migrate resolve --applied 20250123000000_add_home_office_deductions');
+  console.error('⚠️  To resolve the failed migration manually, run one of:');
+  console.error('   npx prisma migrate resolve --applied 20250123000000_add_home_office_deductions (if table exists)');
+  console.error('   npx prisma migrate resolve --rolled-back 20250123000000_add_home_office_deductions (if table does not exist)');
   // Exit with error to fail the build - migrations are important
   // But the build command has || echo so it will continue anyway
   process.exit(1);
