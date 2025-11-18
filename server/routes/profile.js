@@ -44,6 +44,15 @@ const upload = multer({
 // GET user profile
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    // Check if prisma is available
+    if (!prisma || !prisma.user) {
+      console.error('ERROR: Prisma client or User model not available');
+      return res.status(500).json({ 
+        message: 'Database connection error',
+        error: 'Prisma client not initialized'
+      });
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: {
@@ -74,7 +83,16 @@ router.get('/', authenticateToken, async (req, res) => {
     res.json(user);
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ message: 'Error fetching profile' });
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      meta: error.meta
+    });
+    res.status(500).json({ 
+      message: 'Error fetching profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

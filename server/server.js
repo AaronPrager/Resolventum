@@ -25,6 +25,28 @@ if (isVercel) {
 
 // Import Prisma client (handles serverless properly)
 import './prisma/client.js';
+import prisma from './prisma/client.js';
+
+// Verify Prisma client is working on startup
+(async () => {
+  try {
+    // Test Prisma connection by checking if User model exists
+    if (prisma && prisma.user) {
+      console.log('✅ Prisma client verified - User model available');
+      // Try a simple query to verify connection
+      try {
+        await prisma.$queryRaw`SELECT 1`;
+        console.log('✅ Prisma database connection verified');
+      } catch (dbError) {
+        console.error('⚠️  Prisma client exists but database connection failed:', dbError.message);
+      }
+    } else {
+      console.error('❌ Prisma client or User model not available');
+    }
+  } catch (error) {
+    console.error('❌ Error verifying Prisma client:', error.message);
+  }
+})();
 
 // Import routes
 import authRoutes from './routes/auth.js';
