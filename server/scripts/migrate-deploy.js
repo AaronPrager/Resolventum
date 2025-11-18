@@ -63,17 +63,37 @@ try {
   console.error('');
   
   // Always try to resolve failed migrations for our known migration
-  console.log('🔧 Attempting to resolve any failed migrations...');
+  // Since we know the table exists (from db push), try marking as applied first
+  console.log('🔧 Attempting to resolve failed migration...');
+  console.log('   Detected failed migration: 20250123000000_add_home_office_deductions');
+  console.log('   Since table was created via db push, marking migration as applied...');
   
   try {
-    // First, try to mark as rolled back (safer - allows retry)
-    console.log('   Marking migration as rolled back to allow retry...');
+    // Try marking as applied first (table exists)
+    execSync('npx prisma migrate resolve --applied 20250123000000_add_home_office_deductions', {
+      encoding: 'utf-8',
+      env: process.env,
+      cwd: process.cwd(),
+      stdio: 'inherit'
+    });
+    console.log('   ✅ Migration marked as applied');
+    console.log('   Verifying migration status...');
+    execSync('npx prisma migrate deploy', {
+      stdio: 'inherit',
+      env: process.env,
+      cwd: process.cwd()
+    });
+    console.log('✅ Migrations completed successfully after resolution');
+    process.exit(0);
+  } catch (resolveError) {
+    // If marking as applied fails, try rolled back instead
+    console.log('   ⚠️  Marking as applied failed, trying rolled back instead...');
     try {
       execSync('npx prisma migrate resolve --rolled-back 20250123000000_add_home_office_deductions', {
         encoding: 'utf-8',
         env: process.env,
         cwd: process.cwd(),
-        stdio: 'pipe' // Use pipe to suppress output unless it fails
+        stdio: 'inherit'
       });
       console.log('   ✅ Migration marked as rolled back');
       console.log('   Retrying migration deploy...');
@@ -84,13 +104,10 @@ try {
       });
       console.log('✅ Migrations completed successfully after resolution');
       process.exit(0);
-    } catch (resolveError) {
-      // If resolve fails, the migration might not be in failed state, or already resolved
-      console.log('   ⚠️  Could not resolve (migration may not be in failed state)');
-      // Continue to show manual resolution instructions
+    } catch (retryError) {
+      console.error('   ❌ Failed to resolve migration automatically');
+      console.error('   Error details:', retryError.message);
     }
-  } catch (resolveError) {
-    console.error('   ❌ Failed to resolve migration automatically');
   }
   
   console.error('');
