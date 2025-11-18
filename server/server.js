@@ -37,6 +37,7 @@ import reportsRoutes from './routes/reports.js';
 import profileRoutes from './routes/profile.js';
 import googleDriveRoutes from './routes/googledrive.js';
 import purchasesRoutes from './routes/purchases.js';
+import homeOfficeDeductionsRoutes from './routes/homeOfficeDeductions.js';
 
 const app = express();
 const PORT = process.env.PORT || 5002;
@@ -76,6 +77,7 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/googledrive', googleDriveRoutes);
 app.use('/api/purchases', purchasesRoutes);
+app.use('/api/home-office-deductions', homeOfficeDeductionsRoutes);
 
 // Serve uploaded files
 // Serve uploaded files (before error handlers)

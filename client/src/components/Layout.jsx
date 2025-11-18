@@ -10,7 +10,8 @@ import {
   Clock,
   LogOut,
   User,
-  ShoppingCart
+  ShoppingCart,
+  Home
 } from 'lucide-react'
 
 export function Layout() {
@@ -46,6 +47,7 @@ export function Layout() {
     { path: '/lessons', icon: Clock, label: 'Lessons' },
     { path: '/payments', icon: DollarSign, label: 'Payments' },
     { path: '/purchases', icon: ShoppingCart, label: 'Purchases' },
+    { path: '/home-office-deductions', icon: Home, label: 'Home Office' },
     { path: '/reports', icon: FileText, label: 'Reports' }
   ]
 

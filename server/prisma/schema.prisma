@@ -46,6 +46,7 @@ model User {
   payments                 Payment[]
   packages                 Package[]
   purchases                Purchase[]
+  homeOfficeDeductions     HomeOfficeDeduction[]
 }
 
 model Student {
@@ -225,4 +226,24 @@ model Settings {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model HomeOfficeDeduction {
+  id                String   @id @default(uuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category          String   // "mortgage_interest", "property_taxes", "utilities_electric", "utilities_gas", "utilities_water", "home_insurance", "maintenance_repairs", "depreciation"
+  amount            Float    // The expense amount
+  periodType        String   // "monthly" or "yearly"
+  period            DateTime // Date for the period (for monthly: first day of month, for yearly: January 1st of the year)
+  deductionPercent  Float    // Percentage to deduct (0-100)
+  deductibleAmount  Float    // Calculated: amount * (deductionPercent / 100)
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([userId])
+  @@index([category])
+  @@index([period])
+  @@index([periodType])
 }
