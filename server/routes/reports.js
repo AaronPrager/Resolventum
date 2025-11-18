@@ -1214,9 +1214,9 @@ router.get('/monthly-all', async (req, res) => {
 router.get('/packages', async (req, res) => {
   try {
     const userId = req.user.id;
-    const { status } = req.query; // Optional filter: 'active', 'inactive', 'all' (default: 'all')
+    const { status, studentId } = req.query; // Optional filters: 'active', 'inactive', 'all' (default: 'all'), and studentId
 
-    // Build where clause with optional status filter
+    // Build where clause with optional status and student filters
     const where = { userId };
     
     // Filter by status if provided
@@ -1226,8 +1226,13 @@ router.get('/packages', async (req, res) => {
       where.isActive = false;
     }
     // If status is 'all' or not provided, show all packages
+    
+    // Filter by student if provided
+    if (studentId && studentId.trim() !== '') {
+      where.studentId = studentId.trim();
+    }
 
-    console.log(`[Package Report] Fetching packages for userId: ${userId}, status filter: ${status || 'all'}, where clause:`, JSON.stringify(where));
+    console.log(`[Package Report] Fetching packages for userId: ${userId}, status filter: ${status || 'all'}, studentId: ${studentId || 'all'}, where clause:`, JSON.stringify(where));
 
     // Get all packages with student info
     const packages = await prisma.package.findMany({
@@ -1319,9 +1324,11 @@ router.get('/packages', async (req, res) => {
       // Check if package is fully used based on database hoursUsed value
       // Use small threshold (0.01) to account for floating point precision issues
       const hoursRemaining = pkg.totalHours - actualHoursUsed;
-      const isFullyUsed = hoursRemaining <= 0.01;
+      // Only consider fully used if hours were actually used (actualHoursUsed > 0)
+      // This prevents packages with very small totalHours from being marked inactive when no lessons were used
+      const isFullyUsed = actualHoursUsed > 0 && hoursRemaining <= 0.01;
       
-      // If package is fully used (or very close to fully used), mark it as inactive
+      // If package is fully used (or very close to fully used) AND hours were actually used, mark it as inactive
       if (isFullyUsed && pkg.isActive) {
         // Also ensure hoursUsed is set to exactly totalHours to avoid precision issues
         await prisma.package.update({

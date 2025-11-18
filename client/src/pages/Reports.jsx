@@ -17,6 +17,7 @@ export function Reports() {
   const [activeReport, setActiveReport] = useState('outstanding') // 'outstanding'|'monthlyAll'|'packages'|'lessonsPayments'
   const [packagesReport, setPackagesReport] = useState({ packages: [], summary: {} })
   const [packagesFilter, setPackagesFilter] = useState('all') // 'all', 'active', 'inactive'
+  const [packagesStudentFilter, setPackagesStudentFilter] = useState('') // Student ID filter for packages
   const [selectedPackageId, setSelectedPackageId] = useState(null)
   const [packageLessons, setPackageLessons] = useState([])
   const now = new Date()
@@ -328,9 +329,14 @@ export function Reports() {
   // Auto-load packages report when packages report is active
   useEffect(() => {
     if (activeReport === 'packages') {
+      fetchStudents() // Fetch students when packages report is active
       const loadPackages = async () => {
         try {
-          const { data } = await api.get('/reports/packages', { params: { status: packagesFilter } })
+          const params = { status: packagesFilter }
+          if (packagesStudentFilter) {
+            params.studentId = packagesStudentFilter
+          }
+          const { data } = await api.get('/reports/packages', { params })
           console.log('Packages report data loaded:', data)
           if (data && data.packages) {
             setPackagesReport(data)
@@ -345,7 +351,7 @@ export function Reports() {
       }
       loadPackages()
     }
-  }, [activeReport, packagesFilter])
+  }, [activeReport, packagesFilter, packagesStudentFilter])
 
   // Load lessons payments report
   const loadLessonsPaymentsReport = async () => {
@@ -949,8 +955,13 @@ export function Reports() {
               <button
                 onClick={async () => {
                   setActiveReport('packages')
+                  fetchStudents() // Fetch students when packages report is opened
                   try {
-                    const { data } = await api.get('/reports/packages', { params: { status: packagesFilter } })
+                    const params = { status: packagesFilter }
+                    if (packagesStudentFilter) {
+                      params.studentId = packagesStudentFilter
+                    }
+                    const { data } = await api.get('/reports/packages', { params })
                     console.log('Packages report data:', data)
                     if (data && data.packages) {
                       setPackagesReport(data)
@@ -1430,15 +1441,19 @@ export function Reports() {
                   <h2 className="text-lg font-semibold text-gray-900">Package Tracking Report</h2>
                   <p className="text-sm text-gray-500">Track all packages, their utilization, and status.</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <label className="text-sm text-gray-600">Filter:</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="text-sm text-gray-600">Status:</label>
                   <select
                     value={packagesFilter}
                     onChange={async (e) => {
                       const newFilter = e.target.value
                       setPackagesFilter(newFilter)
                       try {
-                        const { data } = await api.get('/reports/packages', { params: { status: newFilter } })
+                        const params = { status: newFilter }
+                        if (packagesStudentFilter) {
+                          params.studentId = packagesStudentFilter
+                        }
+                        const { data } = await api.get('/reports/packages', { params })
                         console.log('Packages report data after filter change:', data)
                         if (data && data.packages) {
                           setPackagesReport(data)
@@ -1456,6 +1471,46 @@ export function Reports() {
                     <option value="all">All Packages</option>
                     <option value="active">Active Only</option>
                     <option value="inactive">Inactive Only</option>
+                  </select>
+                  <label className="text-sm text-gray-600 ml-2">Student:</label>
+                  <select
+                    value={packagesStudentFilter}
+                    onChange={async (e) => {
+                      const newStudentFilter = e.target.value
+                      setPackagesStudentFilter(newStudentFilter)
+                      try {
+                        const params = { status: packagesFilter }
+                        if (newStudentFilter) {
+                          params.studentId = newStudentFilter
+                        }
+                        const { data } = await api.get('/reports/packages', { params })
+                        console.log('Packages report data after student filter change:', data)
+                        if (data && data.packages) {
+                          setPackagesReport(data)
+                        } else {
+                          console.error('Invalid packages report data structure:', data)
+                          setPackagesReport({ packages: [], summary: {} })
+                        }
+                      } catch (error) {
+                        console.error('Failed to load packages report:', error)
+                        toast.error(error.response?.data?.message || 'Failed to load packages report')
+                      }
+                    }}
+                    className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-0 min-w-[150px]"
+                  >
+                    <option value="">All Students</option>
+                    {students
+                      .filter(s => !s.archived && s.usePackages)
+                      .sort((a, b) => {
+                        const nameA = `${a.firstName} ${a.lastName}`.toLowerCase()
+                        const nameB = `${b.firstName} ${b.lastName}`.toLowerCase()
+                        return nameA.localeCompare(nameB)
+                      })
+                      .map(s => (
+                        <option key={s.id} value={s.id}>
+                          {s.firstName} {s.lastName}
+                        </option>
+                      ))}
                   </select>
                   {packagesReport.packages && packagesReport.packages.length > 0 && (
                     <button
@@ -1485,44 +1540,6 @@ export function Reports() {
                   )}
                 </div>
               </div>
-
-              {/* Summary Cards */}
-              {packagesReport.summary && Object.keys(packagesReport.summary).length > 0 && (
-                <div className="px-4 py-4 bg-gray-50 border-b border-gray-200">
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Total Packages</p>
-                      <p className="text-lg font-semibold text-gray-900">{packagesReport.summary.totalPackages || 0}</p>
-                    </div>
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Active Packages</p>
-                      <p className="text-lg font-semibold text-green-700">{packagesReport.summary.activePackages || 0}</p>
-                    </div>
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Total Revenue</p>
-                      <p className="text-lg font-semibold text-gray-900">${(packagesReport.summary.totalPackageRevenue || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Avg Utilization</p>
-                      <p className="text-lg font-semibold text-gray-900">{(packagesReport.summary.averageUtilization || 0).toFixed(1)}%</p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4 mt-4">
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Hours Purchased</p>
-                      <p className="text-lg font-semibold text-gray-900">{(packagesReport.summary.totalHoursPurchased || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Hours Used</p>
-                      <p className="text-lg font-semibold text-indigo-700">{(packagesReport.summary.totalHoursUsed || 0).toFixed(2)}</p>
-                    </div>
-                    <div className="bg-white rounded-md p-3 border border-gray-200">
-                      <p className="text-xs text-gray-500">Hours Remaining</p>
-                      <p className="text-lg font-semibold text-green-700">{(packagesReport.summary.totalHoursRemaining || 0).toFixed(2)}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
 
               {/* Packages Table */}
               <div className="overflow-x-auto">

@@ -555,7 +555,7 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Package not found' });
     }
 
-    // Only allow updating purchasedAt and expiresAt
+    // Allow updating purchasedAt, expiresAt, and isActive
     const updateData = {};
     if (req.body.purchasedAt) {
       // If package has a linked payment, use payment date as source of truth
@@ -589,11 +589,14 @@ router.put('/:id', async (req, res) => {
     if (req.body.expiresAt !== undefined) {
       updateData.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
     }
+    if (req.body.isActive !== undefined) {
+      updateData.isActive = Boolean(req.body.isActive);
+    }
 
     // Prevent updating studentId, name, totalHours, price
     if (req.body.studentId || req.body.name || req.body.totalHours !== undefined || req.body.price !== undefined) {
       return res.status(400).json({ 
-        message: 'Cannot update student, name, total hours, or price. Only date and expiration can be updated.' 
+        message: 'Cannot update student, name, total hours, or price. Only date, expiration, and active status can be updated.' 
       });
     }
 
