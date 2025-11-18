@@ -20,6 +20,15 @@ const CATEGORIES = [
 // Get all home office deductions
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    // Check if the model exists in Prisma client
+    if (!prisma.homeOfficeDeduction) {
+      console.error('ERROR: homeOfficeDeduction model not found in Prisma client');
+      return res.status(500).json({ 
+        message: 'Home office deductions model not available. Prisma client may need to be regenerated.',
+        error: 'Model not found'
+      });
+    }
+    
     const { year, category } = req.query;
     const where = { userId: req.user.id };
     
@@ -46,7 +55,16 @@ router.get('/', authenticateToken, async (req, res) => {
     res.json(deductions);
   } catch (error) {
     console.error('Get home office deductions error:', error);
-    res.status(500).json({ message: 'Error fetching home office deductions' });
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      meta: error.meta
+    });
+    res.status(500).json({ 
+      message: 'Error fetching home office deductions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 
