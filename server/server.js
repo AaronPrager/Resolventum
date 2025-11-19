@@ -82,6 +82,41 @@ app.get('/api/health', (req, res) => {
   }
 });
 
+// Prisma health check - verify Prisma client is working
+app.get('/api/health/prisma', async (req, res) => {
+  try {
+    const checks = {
+      prismaClientExists: !!prisma,
+      hasUserModel: typeof prisma?.user !== 'undefined',
+      hasHomeOfficeModel: typeof prisma?.homeOfficeDeduction !== 'undefined',
+      availableModels: prisma ? Object.keys(prisma).filter(key => !key.startsWith('$') && !key.startsWith('_')) : [],
+      databaseConnection: 'unknown'
+    };
+    
+    // Try to connect to database
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      checks.databaseConnection = 'connected';
+    } catch (dbError) {
+      checks.databaseConnection = `error: ${dbError.message}`;
+    }
+    
+    res.json({
+      status: checks.hasUserModel ? 'ok' : 'error',
+      checks,
+      message: checks.hasUserModel 
+        ? 'Prisma client is working correctly' 
+        : 'Prisma client is missing required models'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'error',
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/students', studentsRoutes);

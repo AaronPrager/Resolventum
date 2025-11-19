@@ -13,33 +13,9 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Create uploads directory for purchase receipts
-const purchaseUploadsDir = path.join(__dirname, '../uploads/purchases');
-if (!fs.existsSync(purchaseUploadsDir)) {
-  fs.mkdirSync(purchaseUploadsDir, { recursive: true });
-}
-
-// Configure multer for purchase receipt uploads
-const purchaseFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const purchaseId = req.params.id || 'temp';
-    const purchaseDir = path.join(purchaseUploadsDir, purchaseId);
-    if (!fs.existsSync(purchaseDir)) {
-      fs.mkdirSync(purchaseDir, { recursive: true });
-    }
-    cb(null, purchaseDir);
-  },
-  filename: (req, file, cb) => {
-    // Generate unique filename: timestamp-originalname
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    const name = path.basename(file.originalname, ext);
-    cb(null, `${uniqueSuffix}-${name}${ext}`);
-  }
-});
-
+// Configure multer for purchase receipt uploads - use memory storage (files go to Google Drive)
 const uploadPurchaseReceipt = multer({
-  storage: purchaseFileStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit per file
   }
@@ -529,66 +505,54 @@ router.post('/', uploadPurchaseReceipt.single('receipt'), [
     const finalCategory = category && category.trim() ? category.trim() : 'Unassigned';
 
     // Get user's file storage preference
+    // Check if Google Drive is connected (required for file uploads)
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { 
-        fileStorageType: true,
         googleDriveAccessToken: true 
       }
     });
 
-    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
+    // If file is being uploaded, Google Drive must be connected
+    if (req.file) {
+      if (!user?.googleDriveAccessToken) {
+        return res.status(400).json({ 
+          message: 'Google Drive connection required',
+          code: 'GOOGLE_DRIVE_NOT_CONNECTED',
+          requiresGoogleDrive: true
+        });
+      }
+    }
     
-    // Handle receipt file upload
+    // Handle receipt file upload (Google Drive required - checked above)
     let receiptFilesMetadata = [];
     if (req.file) {
-      if (useGoogleDrive) {
-        // Upload to Google Drive
-        const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
-        const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
+      const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
+      const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
 
-        try {
-          const fileBuffer = fs.readFileSync(req.file.path);
-          const result = await uploadFileToDrive(
-            req.user.id,
-            fileBuffer,
-            req.file.originalname,
-            req.file.mimetype,
-            purchasesFolder.folderId
-          );
-          
-          receiptFilesMetadata.push({
-            fileName: req.file.originalname,
-            fileId: result.fileId,
-            webViewLink: result.webViewLink,
-            storageType: 'googleDrive',
-            uploadedAt: new Date().toISOString()
-          });
-          
-          // Clean up local temp file
-          fs.unlinkSync(req.file.path);
-          console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
-        } catch (error) {
-          console.error('Error uploading receipt to Google Drive:', error);
-          // Fallback to local storage
-          const tempPurchaseId = 'temp';
-          const relativePath = `/uploads/purchases/${tempPurchaseId}/${req.file.filename}`;
-          receiptFilesMetadata.push({
-            fileName: req.file.originalname,
-            filePath: relativePath,
-            storageType: 'local',
-            uploadedAt: new Date().toISOString()
-          });
-        }
-      } else {
-        // Local storage - file already saved by multer
-        const tempPurchaseId = 'temp';
-        const relativePath = `/uploads/purchases/${tempPurchaseId}/${req.file.filename}`;
+      try {
+        // Use file.buffer (memory storage) instead of file.path
+        const result = await uploadFileToDrive(
+          req.user.id,
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
+          purchasesFolder.folderId
+        );
+        
         receiptFilesMetadata.push({
           fileName: req.file.originalname,
-          filePath: relativePath,
-          storageType: 'local',
+          fileId: result.fileId,
+          webViewLink: result.webViewLink,
+          storageType: 'googleDrive',
           uploadedAt: new Date().toISOString()
+        });
+        
+        console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
+      } catch (error) {
+        console.error('Error uploading receipt to Google Drive:', error);
+        return res.status(500).json({ 
+          message: `Failed to upload file "${req.file.originalname}" to Google Drive: ${error.message}` 
         });
       }
     }
@@ -623,31 +587,6 @@ router.post('/', uploadPurchaseReceipt.single('receipt'), [
       const purchases = await prisma.purchase.createMany({
         data: purchasesData,
       });
-
-      // If using local storage and receipt was uploaded, move file to first purchase's folder
-      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
-        const firstPurchase = await prisma.purchase.findFirst({
-          where: { recurringGroupId },
-          orderBy: { date: 'asc' }
-        });
-        if (firstPurchase && req.file.path && fs.existsSync(req.file.path)) {
-          const oldPath = req.file.path;
-          const newDir = path.join(purchaseUploadsDir, firstPurchase.id);
-          if (!fs.existsSync(newDir)) {
-            fs.mkdirSync(newDir, { recursive: true });
-          }
-          const newPath = path.join(newDir, req.file.filename);
-          if (fs.existsSync(oldPath)) {
-            fs.renameSync(oldPath, newPath);
-            // Update file path in metadata
-            receiptFilesMetadata[0].filePath = `/uploads/purchases/${firstPurchase.id}/${req.file.filename}`;
-            await prisma.purchase.update({
-              where: { id: firstPurchase.id },
-              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
-            });
-          }
-        }
-      }
 
       // Update frequent vendors if vendor is provided
       if (vendor && vendor.trim()) {
@@ -684,26 +623,6 @@ router.post('/', uploadPurchaseReceipt.single('receipt'), [
         },
       });
 
-      // If using local storage and receipt was uploaded, move file to purchase's folder
-      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
-        if (req.file.path && fs.existsSync(req.file.path)) {
-          const oldPath = req.file.path;
-          const newDir = path.join(purchaseUploadsDir, purchase.id);
-          if (!fs.existsSync(newDir)) {
-            fs.mkdirSync(newDir, { recursive: true });
-          }
-          const newPath = path.join(newDir, req.file.filename);
-          if (fs.existsSync(oldPath)) {
-            fs.renameSync(oldPath, newPath);
-            // Update file path in metadata
-            receiptFilesMetadata[0].filePath = `/uploads/purchases/${purchase.id}/${req.file.filename}`;
-            await prisma.purchase.update({
-              where: { id: purchase.id },
-              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
-            });
-          }
-        }
-      }
 
       // Update frequent vendors if vendor is provided (non-blocking)
       if (vendor && vendor.trim()) {
@@ -813,74 +732,54 @@ router.put('/:id', uploadPurchaseReceipt.single('receipt'), [
       ? (category && category.trim() ? category.trim() : 'Unassigned')
       : undefined;
 
-    // Get user's file storage preference
+    // Check if Google Drive is connected (required for file uploads)
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { 
-        fileStorageType: true,
         googleDriveAccessToken: true 
       }
     });
 
-    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
+    // If file is being uploaded, Google Drive must be connected
+    if (req.file) {
+      if (!user?.googleDriveAccessToken) {
+        return res.status(400).json({ 
+          message: 'Google Drive connection required',
+          code: 'GOOGLE_DRIVE_NOT_CONNECTED',
+          requiresGoogleDrive: true
+        });
+      }
+    }
 
-    // Handle receipt file upload
+    // Handle receipt file upload (Google Drive required - checked above)
     let receiptFilesMetadata = existingPurchase.receiptFiles ? JSON.parse(existingPurchase.receiptFiles) : [];
     if (req.file) {
-      if (useGoogleDrive) {
-        // Upload to Google Drive
-        const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
-        const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
+      const { uploadFileToDrive, getOrCreatePurchasesFolder } = await import('../utils/googleDrive.js');
+      const purchasesFolder = await getOrCreatePurchasesFolder(req.user.id);
 
-        try {
-          const fileBuffer = fs.readFileSync(req.file.path);
-          const result = await uploadFileToDrive(
-            req.user.id,
-            fileBuffer,
-            req.file.originalname,
-            req.file.mimetype,
-            purchasesFolder.folderId
-          );
-          
-          receiptFilesMetadata.push({
-            fileName: req.file.originalname,
-            fileId: result.fileId,
-            webViewLink: result.webViewLink,
-            storageType: 'googleDrive',
-            uploadedAt: new Date().toISOString()
-          });
-          
-          // Clean up local temp file
-          fs.unlinkSync(req.file.path);
-          console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
-        } catch (error) {
-          console.error('Error uploading receipt to Google Drive:', error);
-          // Fallback to local storage
-          const relativePath = `/uploads/purchases/${req.params.id}/${req.file.filename}`;
-          receiptFilesMetadata.push({
-            fileName: req.file.originalname,
-            filePath: relativePath,
-            storageType: 'local',
-            uploadedAt: new Date().toISOString()
-          });
-        }
-      } else {
-        // Local storage - move file to purchase's folder
-        const oldPath = req.file.path;
-        const newDir = path.join(purchaseUploadsDir, req.params.id);
-        if (!fs.existsSync(newDir)) {
-          fs.mkdirSync(newDir, { recursive: true });
-        }
-        const newPath = path.join(newDir, req.file.filename);
-        if (fs.existsSync(oldPath)) {
-          fs.renameSync(oldPath, newPath);
-        }
-        const relativePath = `/uploads/purchases/${req.params.id}/${req.file.filename}`;
+      try {
+        // Use file.buffer (memory storage) instead of file.path
+        const result = await uploadFileToDrive(
+          req.user.id,
+          req.file.buffer,
+          req.file.originalname,
+          req.file.mimetype,
+          purchasesFolder.folderId
+        );
+        
         receiptFilesMetadata.push({
           fileName: req.file.originalname,
-          filePath: relativePath,
-          storageType: 'local',
+          fileId: result.fileId,
+          webViewLink: result.webViewLink,
+          storageType: 'googleDrive',
           uploadedAt: new Date().toISOString()
+        });
+        
+        console.log(`Successfully uploaded receipt "${req.file.originalname}" to Google Drive`);
+      } catch (error) {
+        console.error('Error uploading receipt to Google Drive:', error);
+        return res.status(500).json({ 
+          message: `Failed to upload file "${req.file.originalname}" to Google Drive: ${error.message}` 
         });
       }
     }
@@ -942,31 +841,6 @@ router.put('/:id', uploadPurchaseReceipt.single('receipt'), [
       const purchases = await prisma.purchase.createMany({
         data: purchasesData,
       });
-
-      // If using local storage and receipt was uploaded, move file to first purchase's folder
-      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
-        const firstPurchase = await prisma.purchase.findFirst({
-          where: { recurringGroupId },
-          orderBy: { date: 'asc' }
-        });
-        if (firstPurchase && req.file.path && fs.existsSync(req.file.path)) {
-          const oldPath = req.file.path;
-          const newDir = path.join(purchaseUploadsDir, firstPurchase.id);
-          if (!fs.existsSync(newDir)) {
-            fs.mkdirSync(newDir, { recursive: true });
-          }
-          const newPath = path.join(newDir, req.file.filename);
-          if (fs.existsSync(oldPath)) {
-            fs.renameSync(oldPath, newPath);
-            // Update file path in metadata
-            receiptFilesMetadata[0].filePath = `/uploads/purchases/${firstPurchase.id}/${req.file.filename}`;
-            await prisma.purchase.update({
-              where: { id: firstPurchase.id },
-              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
-            });
-          }
-        }
-      }
 
       // Update frequent vendors if vendor is provided (non-blocking)
       if (vendor !== undefined && vendor && vendor.trim()) {
@@ -1063,31 +937,6 @@ router.put('/:id', uploadPurchaseReceipt.single('receipt'), [
       const purchases = await prisma.purchase.createMany({
         data: purchasesData,
       });
-
-      // If using local storage and receipt was uploaded, move file to first purchase's folder
-      if (req.file && !useGoogleDrive && receiptFilesMetadata.length > 0 && receiptFilesMetadata[0].storageType === 'local') {
-        const newFirstPurchase = await prisma.purchase.findFirst({
-          where: { recurringGroupId: existingPurchase.recurringGroupId },
-          orderBy: { date: 'asc' }
-        });
-        if (newFirstPurchase && req.file.path && fs.existsSync(req.file.path)) {
-          const oldPath = req.file.path;
-          const newDir = path.join(purchaseUploadsDir, newFirstPurchase.id);
-          if (!fs.existsSync(newDir)) {
-            fs.mkdirSync(newDir, { recursive: true });
-          }
-          const newPath = path.join(newDir, req.file.filename);
-          if (fs.existsSync(oldPath)) {
-            fs.renameSync(oldPath, newPath);
-            // Update file path in metadata
-            receiptFilesMetadata[0].filePath = `/uploads/purchases/${newFirstPurchase.id}/${req.file.filename}`;
-            await prisma.purchase.update({
-              where: { id: newFirstPurchase.id },
-              data: { receiptFiles: JSON.stringify(receiptFilesMetadata) }
-            });
-          }
-        }
-      }
 
       // Update frequent vendors if vendor is provided (non-blocking)
       if (vendor !== undefined && vendor && vendor.trim()) {
@@ -1186,18 +1035,6 @@ router.delete('/:id/receipts', authenticateToken, async (req, res) => {
         console.log(`Deleted Google Drive receipt: ${fileToDelete.fileName}`);
       } catch (error) {
         console.error('Error deleting Google Drive file:', error);
-        // Continue to remove from metadata even if deletion fails
-      }
-    } else if (fileToDelete.storageType === 'local' && fileToDelete.filePath) {
-      try {
-        // Extract the file path and delete from filesystem
-        const filePath = path.join(__dirname, '..', fileToDelete.filePath);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-          console.log(`Deleted local receipt: ${fileToDelete.fileName}`);
-        }
-      } catch (error) {
-        console.error('Error deleting local file:', error);
         // Continue to remove from metadata even if deletion fails
       }
     }

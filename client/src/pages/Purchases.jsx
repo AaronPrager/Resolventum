@@ -397,12 +397,25 @@ export function Purchases() {
       await fetchPaymentMethods()
       handleCloseModal()
     } catch (error) {
-      // Only show error if it's not a validation error (which we handle above)
-      const errorMessage = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg
-      if (errorMessage) {
-        toast.error(errorMessage)
+      // Check for Google Drive connection requirement
+      if (error.response?.data?.code === 'GOOGLE_DRIVE_NOT_CONNECTED' || error.response?.data?.requiresGoogleDrive) {
+        toast.error('Google Drive connection required. Please connect Google Drive in your account settings to upload files.', {
+          duration: 5000
+        })
+        // Optionally navigate to account page after a delay
+        setTimeout(() => {
+          if (window.confirm('Would you like to go to Account Settings to connect Google Drive now?')) {
+            window.location.href = '/account'
+          }
+        }, 2000)
       } else {
-        toast.error('Failed to save purchase')
+        // Only show error if it's not a validation error (which we handle above)
+        const errorMessage = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg
+        if (errorMessage) {
+          toast.error(errorMessage)
+        } else {
+          toast.error('Failed to save purchase')
+        }
       }
     } finally {
       setIsSubmitting(false)

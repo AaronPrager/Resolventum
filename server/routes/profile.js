@@ -13,11 +13,7 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, '../uploads/logos');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// Logo uploads go to Google Drive only
 
 // Configure multer for file uploads (store in memory for processing)
 const storage = multer.memoryStorage();
@@ -154,33 +150,45 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
       updateData.googleDriveFolderId = googleDriveFolderId || null;
     }
 
-    // Handle logo upload
+    // Handle logo upload (Google Drive required)
     if (req.file) {
       try {
         console.log('Processing logo upload...');
         
-        // Delete old logo if it exists
-        const user = await prisma.user.findUnique({
+        // Check if Google Drive is connected
+        const currentUser = await prisma.user.findUnique({
           where: { id: req.user.id },
-          select: { logoUrl: true }
+          select: { 
+            googleDriveAccessToken: true,
+            logoUrl: true
+          }
         });
 
-        if (user?.logoUrl) {
-          const oldLogoPath = path.join(__dirname, '../uploads/logos', path.basename(user.logoUrl));
-          if (fs.existsSync(oldLogoPath)) {
-            console.log('Deleting old logo:', oldLogoPath);
-            fs.unlinkSync(oldLogoPath);
+        if (!currentUser?.googleDriveAccessToken) {
+          return res.status(400).json({ 
+            message: 'Google Drive connection required',
+            code: 'GOOGLE_DRIVE_NOT_CONNECTED',
+            requiresGoogleDrive: true
+          });
+        }
+
+        // Delete old logo from Google Drive if it exists
+        if (currentUser?.logoUrl && currentUser.logoUrl.startsWith('https://drive.google.com')) {
+          try {
+            const { deleteFileFromDrive } = await import('../utils/googleDrive.js');
+            // Extract file ID from Google Drive URL
+            const fileIdMatch = currentUser.logoUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+            if (fileIdMatch && fileIdMatch[1]) {
+              await deleteFileFromDrive(req.user.id, fileIdMatch[1]);
+              console.log('Deleted old logo from Google Drive');
+            }
+          } catch (error) {
+            console.warn('Error deleting old logo from Google Drive (non-critical):', error.message);
           }
         }
 
         // Resize and optimize image to small version (max 200x200px)
-        const filename = `${req.user.id}-${Date.now()}.jpg`;
-        const outputPath = path.join(uploadsDir, filename);
-        
-        console.log('Resizing image to:', outputPath);
-        console.log('Input buffer size:', req.file.buffer.length);
-
-        await sharp(req.file.buffer)
+        const resizedBuffer = await sharp(req.file.buffer)
           .resize(200, 200, {
             fit: 'inside',
             withoutEnlargement: true
@@ -189,14 +197,24 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
             quality: 85,
             mozjpeg: true
           })
-          .toFile(outputPath);
+          .toBuffer();
 
-        console.log('Image saved successfully to:', outputPath);
-        console.log('File exists:', fs.existsSync(outputPath));
+        // Upload to Google Drive
+        const { uploadFileToDrive, getOrCreateLessonsFolder } = await import('../utils/googleDrive.js');
+        const lessonsFolder = await getOrCreateLessonsFolder(req.user.id);
+        const filename = `logo-${req.user.id}-${Date.now()}.jpg`;
+        
+        const result = await uploadFileToDrive(
+          req.user.id,
+          resizedBuffer,
+          filename,
+          'image/jpeg',
+          lessonsFolder.folderId
+        );
 
-        // Store relative path for logo URL
-        updateData.logoUrl = `/uploads/logos/${filename}`;
-        console.log('Logo URL set to:', updateData.logoUrl);
+        // Store Google Drive web view link
+        updateData.logoUrl = result.webViewLink;
+        console.log('Logo uploaded to Google Drive:', result.webViewLink);
       } catch (error) {
         console.error('Error processing logo:', error);
         console.error('Error stack:', error.stack);
@@ -211,10 +229,17 @@ router.put('/', authenticateToken, upload.single('logo'), async (req, res) => {
         select: { logoUrl: true }
       });
 
-      if (user?.logoUrl) {
-        const oldLogoPath = path.join(__dirname, '../uploads/logos', path.basename(user.logoUrl));
-        if (fs.existsSync(oldLogoPath)) {
-          fs.unlinkSync(oldLogoPath);
+      if (user?.logoUrl && user.logoUrl.startsWith('https://drive.google.com')) {
+        try {
+          const { deleteFileFromDrive } = await import('../utils/googleDrive.js');
+          // Extract file ID from Google Drive URL
+          const fileIdMatch = user.logoUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+          if (fileIdMatch && fileIdMatch[1]) {
+            await deleteFileFromDrive(req.user.id, fileIdMatch[1]);
+            console.log('Deleted logo from Google Drive');
+          }
+        } catch (error) {
+          console.warn('Error deleting logo from Google Drive (non-critical):', error.message);
         }
       }
       updateData.logoUrl = null;

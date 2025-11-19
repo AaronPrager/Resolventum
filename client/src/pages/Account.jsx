@@ -29,7 +29,7 @@ export function Account() {
     autoEmailEnabled: false,
     autoEmailTime: '08:00',
     autoEmailAddress: '',
-    fileStorageType: 'local',
+    fileStorageType: 'googleDrive',
     googleDriveFolderId: ''
   })
   const [profileLoading, setProfileLoading] = useState(false)
@@ -47,7 +47,7 @@ export function Account() {
       const { data } = await api.get('/profile')
       setProfile({
         ...data,
-        fileStorageType: data.fileStorageType || 'local',
+        fileStorageType: data.fileStorageType || 'googleDrive',
         googleDriveFolderId: data.googleDriveFolderId || ''
       })
       setGoogleDriveConnected(!!data.googleDriveAccessToken)
@@ -82,7 +82,7 @@ export function Account() {
       formData.append('autoEmailEnabled', profile.autoEmailEnabled)
       formData.append('autoEmailTime', profile.autoEmailTime || '')
       formData.append('autoEmailAddress', profile.autoEmailAddress || '')
-      formData.append('fileStorageType', profile.fileStorageType || 'local')
+      formData.append('fileStorageType', 'googleDrive')
       if (profile.googleDriveFolderId) {
         formData.append('googleDriveFolderId', profile.googleDriveFolderId)
       }
@@ -122,7 +122,14 @@ export function Account() {
       }
       toast.success('Profile updated successfully')
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to update profile')
+      // Check for Google Drive connection requirement
+      if (error.response?.data?.code === 'GOOGLE_DRIVE_NOT_CONNECTED' || error.response?.data?.requiresGoogleDrive) {
+        toast.error('Google Drive connection required to upload logo. Please connect Google Drive below.', {
+          duration: 5000
+        })
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to update profile')
+      }
     } finally {
       setProfileLoading(false)
     }
@@ -222,7 +229,6 @@ export function Account() {
     try {
       await api.post('/googledrive/disconnect')
       setGoogleDriveConnected(false)
-      setProfile({ ...profile, fileStorageType: 'local' })
       toast.success('Google Drive disconnected successfully')
     } catch (error) {
       console.error('Error disconnecting Google Drive:', error)
@@ -488,54 +494,13 @@ export function Account() {
           {/* File Storage Settings Section */}
           <div className="border-t border-gray-200 pt-6">
             <h3 className="text-md font-semibold text-gray-900 mb-4 flex items-center gap-2">
-              <HardDrive className="w-5 h-5" />
+              <Cloud className="w-5 h-5" />
               File Storage
             </h3>
-            <p className="text-sm text-gray-500 mb-4">Choose where to store files (lesson notes, homework, etc.).</p>
+            <p className="text-sm text-gray-500 mb-4">All files are stored in Google Drive. Connect your Google Drive account to enable file uploads.</p>
             
-            {/* Storage Type Selection */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Storage Location
-              </label>
-              <div className="space-y-2">
-                <label className="flex items-center gap-3 p-3 border border-gray-300 rounded-md cursor-pointer hover:bg-gray-50">
-                  <input
-                    type="radio"
-                    name="fileStorageType"
-                    value="local"
-                    checked={profile.fileStorageType === 'local'}
-                    onChange={(e) => setProfile({ ...profile, fileStorageType: e.target.value })}
-                    className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                  />
-                  <HardDrive className="w-5 h-5 text-gray-400" />
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-gray-700">Local Storage</div>
-                    <div className="text-xs text-gray-500">Files stored on server (works locally, not on Vercel)</div>
-                  </div>
-                </label>
-                
-                <label className="flex items-center gap-3 p-3 border border-gray-300 rounded-md cursor-pointer hover:bg-gray-50">
-                  <input
-                    type="radio"
-                    name="fileStorageType"
-                    value="googleDrive"
-                    checked={profile.fileStorageType === 'googleDrive'}
-                    onChange={(e) => setProfile({ ...profile, fileStorageType: e.target.value })}
-                    className="w-4 h-4 text-indigo-600 border-gray-300 focus:ring-indigo-500"
-                  />
-                  <Cloud className="w-5 h-5 text-gray-400" />
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-gray-700">Google Drive</div>
-                    <div className="text-xs text-gray-500">Files stored in your Google Drive (works everywhere)</div>
-                  </div>
-                </label>
-              </div>
-            </div>
-
             {/* Google Drive Connection */}
-            {profile.fileStorageType === 'googleDrive' && (
-              <div className="mt-4 p-4 bg-gray-50 rounded-md">
+            <div className="p-4 bg-gray-50 rounded-md">
                 {googleDriveConnected ? (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2 text-green-600">
@@ -602,8 +567,7 @@ export function Account() {
                     )}
                   </div>
                 )}
-              </div>
-            )}
+            </div>
           </div>
 
           <button

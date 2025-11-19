@@ -15,33 +15,9 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Create uploads directory for lesson files
-const lessonUploadsDir = path.join(__dirname, '../uploads/lessons');
-if (!fs.existsSync(lessonUploadsDir)) {
-  fs.mkdirSync(lessonUploadsDir, { recursive: true });
-}
-
-// Configure multer for lesson file uploads
-const lessonFileStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const lessonId = req.params.id || 'temp';
-    const lessonDir = path.join(lessonUploadsDir, lessonId);
-    if (!fs.existsSync(lessonDir)) {
-      fs.mkdirSync(lessonDir, { recursive: true });
-    }
-    cb(null, lessonDir);
-  },
-  filename: (req, file, cb) => {
-    // Generate unique filename: timestamp-originalname
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    const name = path.basename(file.originalname, ext);
-    cb(null, `${uniqueSuffix}-${name}${ext}`);
-  }
-});
-
+// Configure multer for lesson file uploads - use memory storage (files go to Google Drive)
 const uploadLessonFiles = multer({
-  storage: lessonFileStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: 10 * 1024 * 1024 // 10MB limit per file
   }
@@ -853,24 +829,23 @@ router.put('/:id', authenticateToken, uploadLessonFiles.fields([
       finalPrice = currentLesson.price;
     }
 
-    // Get user's file storage preference
+    // Check if Google Drive is connected (required for file uploads)
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { 
-        fileStorageType: true,
         googleDriveAccessToken: true 
       }
     });
 
-    console.log('User fileStorageType:', user?.fileStorageType);
-    console.log('Google Drive connected:', !!user?.googleDriveAccessToken);
-    console.log('Files received:', req.files ? Object.keys(req.files) : 'none');
-    
-    // Determine if we should use Google Drive
-    const useGoogleDrive = user?.fileStorageType === 'googleDrive' && !!user?.googleDriveAccessToken;
-    
-    if (user?.fileStorageType === 'googleDrive' && !user?.googleDriveAccessToken) {
-      console.warn('User selected Google Drive but is not connected. Falling back to local storage.');
+    // If files are being uploaded, Google Drive must be connected
+    if (req.files && (req.files.notesFiles?.length > 0 || req.files.homeworkFiles?.length > 0)) {
+      if (!user?.googleDriveAccessToken) {
+        return res.status(400).json({ 
+          message: 'Google Drive connection required',
+          code: 'GOOGLE_DRIVE_NOT_CONNECTED',
+          requiresGoogleDrive: true
+        });
+      }
     }
 
     // Handle file uploads
@@ -880,117 +855,75 @@ router.put('/:id', authenticateToken, uploadLessonFiles.fields([
     if (req.files) {
       const { notesFiles, homeworkFiles } = req.files;
 
-      // Process notes files
+      // Process notes files (Google Drive required - checked above)
       if (notesFiles && notesFiles.length > 0) {
-        console.log(`Processing ${notesFiles.length} notes file(s), useGoogleDrive: ${useGoogleDrive}`);
-        if (useGoogleDrive) {
-          // Upload to Google Drive
-          const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
-          const studentName = `${student.firstName} ${student.lastName}`;
-          const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
+        console.log(`Processing ${notesFiles.length} notes file(s) to Google Drive`);
+        const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
+        const studentName = `${student.firstName} ${student.lastName}`;
+        const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
 
-          for (const file of notesFiles) {
-            try {
-              const fileBuffer = fs.readFileSync(file.path);
-              const result = await uploadFileToDrive(
-                req.user.id,
-                fileBuffer,
-                file.originalname,
-                file.mimetype,
-                studentFolder.folderId
-              );
-              
-              notesFilesMetadata.push({
-                fileName: file.originalname,
-                fileId: result.fileId,
-                webViewLink: result.webViewLink,
-                storageType: 'googleDrive',
-                uploadedAt: new Date().toISOString()
-              });
-              
-              // Clean up local temp file
-              fs.unlinkSync(file.path);
-              console.log(`Successfully uploaded notes file "${file.originalname}" to Google Drive`);
-            } catch (error) {
-              console.error('Error uploading notes file to Google Drive:', error);
-              console.error('Error details:', error.message, error.stack);
-              // Fallback to local storage
-              const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
-              notesFilesMetadata.push({
-                fileName: file.originalname,
-                filePath: relativePath,
-                storageType: 'local',
-                uploadedAt: new Date().toISOString()
-              });
-            }
-          }
-        } else {
-          // Local storage - files already saved by multer
-          for (const file of notesFiles) {
-            const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+        for (const file of notesFiles) {
+          try {
+            // Use file.buffer (memory storage) instead of file.path
+            const result = await uploadFileToDrive(
+              req.user.id,
+              file.buffer,
+              file.originalname,
+              file.mimetype,
+              studentFolder.folderId
+            );
+            
             notesFilesMetadata.push({
               fileName: file.originalname,
-              filePath: relativePath,
-              storageType: 'local',
+              fileId: result.fileId,
+              webViewLink: result.webViewLink,
+              storageType: 'googleDrive',
               uploadedAt: new Date().toISOString()
+            });
+            
+            console.log(`Successfully uploaded notes file "${file.originalname}" to Google Drive`);
+          } catch (error) {
+            console.error('Error uploading notes file to Google Drive:', error);
+            console.error('Error details:', error.message, error.stack);
+            return res.status(500).json({ 
+              message: `Failed to upload file "${file.originalname}" to Google Drive: ${error.message}` 
             });
           }
         }
       }
 
-      // Process homework files
+      // Process homework files (Google Drive required - checked above)
       if (homeworkFiles && homeworkFiles.length > 0) {
-        console.log(`Processing ${homeworkFiles.length} homework file(s), useGoogleDrive: ${useGoogleDrive}`);
-        if (useGoogleDrive) {
-          // Upload to Google Drive
-          const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
-          const studentName = `${student.firstName} ${student.lastName}`;
-          const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
+        console.log(`Processing ${homeworkFiles.length} homework file(s) to Google Drive`);
+        const { uploadFileToDrive, getOrCreateStudentFolder } = await import('../utils/googleDrive.js');
+        const studentName = `${student.firstName} ${student.lastName}`;
+        const studentFolder = await getOrCreateStudentFolder(req.user.id, studentName);
 
-          for (const file of homeworkFiles) {
-            try {
-              const fileBuffer = fs.readFileSync(file.path);
-              const result = await uploadFileToDrive(
-                req.user.id,
-                fileBuffer,
-                file.originalname,
-                file.mimetype,
-                studentFolder.folderId
-              );
-              
-              homeworkFilesMetadata.push({
-                fileName: file.originalname,
-                fileId: result.fileId,
-                webViewLink: result.webViewLink,
-                storageType: 'googleDrive',
-                uploadedAt: new Date().toISOString()
-              });
-              
-              // Clean up local temp file
-              fs.unlinkSync(file.path);
-              console.log(`Successfully uploaded homework file "${file.originalname}" to Google Drive`);
-            } catch (error) {
-              console.error('Error uploading homework file to Google Drive:', error);
-              console.error('Error details:', error.message, error.stack);
-              // Fallback to local storage
-              const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
-              homeworkFilesMetadata.push({
-                fileName: file.originalname,
-                filePath: relativePath,
-                storageType: 'local',
-                uploadedAt: new Date().toISOString()
-              });
-            }
-          }
-        } else {
-          // Local storage - files already saved by multer
-          for (const file of homeworkFiles) {
-            const relativePath = `/uploads/lessons/${req.params.id}/${file.filename}`;
+        for (const file of homeworkFiles) {
+          try {
+            // Use file.buffer (memory storage) instead of file.path
+            const result = await uploadFileToDrive(
+              req.user.id,
+              file.buffer,
+              file.originalname,
+              file.mimetype,
+              studentFolder.folderId
+            );
+            
             homeworkFilesMetadata.push({
               fileName: file.originalname,
-              filePath: relativePath,
-              storageType: 'local',
+              fileId: result.fileId,
+              webViewLink: result.webViewLink,
+              storageType: 'googleDrive',
               uploadedAt: new Date().toISOString()
+            });
+            
+            console.log(`Successfully uploaded homework file "${file.originalname}" to Google Drive`);
+          } catch (error) {
+            console.error('Error uploading homework file to Google Drive:', error);
+            console.error('Error details:', error.message, error.stack);
+            return res.status(500).json({ 
+              message: `Failed to upload file "${file.originalname}" to Google Drive: ${error.message}` 
             });
           }
         }

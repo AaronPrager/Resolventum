@@ -320,7 +320,19 @@ export function StudentDetail() {
       toast.success('Homework saved successfully')
     } catch (error) {
       console.error('Error updating homework:', error)
-      toast.error('Failed to save homework')
+      // Check for Google Drive connection requirement
+      if (error.response?.data?.code === 'GOOGLE_DRIVE_NOT_CONNECTED' || error.response?.data?.requiresGoogleDrive) {
+        toast.error('Google Drive connection required. Please connect Google Drive in your account settings to upload files.', {
+          duration: 5000
+        })
+        setTimeout(() => {
+          if (window.confirm('Would you like to go to Account Settings to connect Google Drive now?')) {
+            window.location.href = '/account'
+          }
+        }, 2000)
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to save homework')
+      }
     } finally {
       setSavingHomework(false)
     }
