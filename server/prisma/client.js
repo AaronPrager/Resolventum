@@ -39,21 +39,55 @@ function initializePrisma() {
       }
       prisma = global.prisma;
     }
+    
+    // Verify that the client has expected models
+    const hasUserModel = typeof prisma.user !== 'undefined';
+    const hasHomeOfficeModel = typeof prisma.homeOfficeDeduction !== 'undefined';
+    
     console.log('Prisma Client initialized successfully');
+    console.log(`  - User model: ${hasUserModel ? '✅' : '❌'}`);
+    console.log(`  - HomeOfficeDeduction model: ${hasHomeOfficeModel ? '✅' : '❌'}`);
+    
+    if (!hasUserModel) {
+      console.error('CRITICAL: User model not found in Prisma client!');
+      console.error('Available properties:', Object.keys(prisma).filter(key => !key.startsWith('$')));
+    }
+    
     prismaInitialized = true;
     return prisma;
   } catch (error) {
     console.error('Failed to initialize Prisma Client:', error.message);
     console.error('Error stack:', error.stack);
-    throw error;
+    // Don't throw - return a dummy client that will fail gracefully
+    prisma = {
+      $connect: async () => { throw new Error('Prisma initialization failed: ' + error.message); },
+      $disconnect: async () => {},
+      $queryRaw: async () => { throw new Error('Prisma initialization failed: ' + error.message); },
+      user: { findUnique: () => Promise.reject(new Error('Prisma initialization failed: ' + error.message)) }
+    };
+    prismaInitialized = true;
+    return prisma;
   }
 }
 
 // Create a proxy that initializes Prisma on first access
 const prismaProxy = new Proxy({}, {
   get(target, prop) {
-    const client = initializePrisma();
-    return client[prop];
+    try {
+      const client = initializePrisma();
+      const value = client[prop];
+      
+      // If accessing a model that doesn't exist, log error
+      if (prop && !prop.startsWith('$') && !prop.startsWith('_') && value === undefined) {
+        console.error(`⚠️  Prisma model '${prop}' not found in client`);
+        console.error('Available models:', Object.keys(client).filter(key => !key.startsWith('$') && !key.startsWith('_')));
+      }
+      
+      return value;
+    } catch (error) {
+      console.error(`Error accessing Prisma property '${prop}':`, error.message);
+      throw error;
+    }
   }
 });
 
