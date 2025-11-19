@@ -120,6 +120,15 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Email and password required' });
     }
 
+    // Check if Prisma client is available
+    if (!prisma || !prisma.user) {
+      console.error('ERROR: Prisma client or User model not available in login route');
+      return res.status(500).json({ 
+        message: 'Database connection error',
+        error: 'Prisma client not initialized'
+      });
+    }
+
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
@@ -156,7 +165,17 @@ router.post('/login', async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Error logging in' });
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      meta: error.meta,
+      name: error.name
+    });
+    res.status(500).json({ 
+      message: 'Error logging in',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 });
 

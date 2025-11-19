@@ -6,6 +6,7 @@ import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -31,6 +32,15 @@ try {
 console.log('⚙️  Generating Prisma client...');
 execSync('npx prisma generate', { stdio: 'inherit' });
 
+// Verify Prisma client was generated
+const prismaClientPath = join(serverDir, 'node_modules/@prisma/client');
+if (fs.existsSync(prismaClientPath)) {
+  console.log('✅ Prisma client generated successfully');
+} else {
+  console.error('❌ ERROR: Prisma client was not generated!');
+  process.exit(1);
+}
+
 console.log('🔄 Running database migrations...');
 try {
   execSync('npm run db:migrate:deploy', { stdio: 'inherit' });
@@ -41,6 +51,14 @@ try {
 
 console.log('⚙️  Regenerating Prisma client after migrations...');
 execSync('npx prisma generate', { stdio: 'inherit' });
+
+// Verify again
+if (fs.existsSync(prismaClientPath)) {
+  console.log('✅ Prisma client regenerated successfully');
+} else {
+  console.error('❌ ERROR: Prisma client regeneration failed!');
+  process.exit(1);
+}
 
 console.log('✅ Server build completed');
 
